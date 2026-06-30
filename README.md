@@ -21,7 +21,24 @@ Click **▶ Play** buttons or any node to hear it (Web Audio).
 - **The comma becomes a visible choice.** A "D" reached as `9/8` above C and a "D" reached
   as `10/9` below E are two different dots, two different frequencies. The preview warns you
   when a new note is a near-collision with an existing one ("a *different* D, 21.5¢ apart").
-- **Color = drift** from the nearest 12-TET piano key. That coloring *is* the comma, made visible.
+- **Color = consonance, not 12-TET.** Each note is colored by **Tenney harmonic distance**
+  (`HD = log₂(n·d)` of the interval in lowest terms — octave≈1, fifth≈2.6, major third≈4.3,
+  7/4≈4.8, tritone≈10). Lower = simpler ratio = more consonant = greener. Crucially the color
+  is **relational and live**: a note is colored by its consonance *with the notes you're
+  currently holding or have just played* (recently-played notes decay over a few seconds), so
+  the whole lattice recolors around whatever you're playing. With nothing held it falls back to
+  consonance vs. the root.
+
+## Tune-by-dragging (the main way to play)
+
+- **Right-click any node** → spawns a child tuned *from* that note.
+- **Drag up/down** → the new pitch **locks to just intervals** from the parent.
+- **Scroll wheel** sets the prime limit of the snap grid: all the way down = octaves only
+  (2-limit), scroll up to add fifths (3), thirds (5), harmonic 7ths (7), then 11, 13. Simpler
+  ratios have a wider capture zone, so they're stickier — "privilege simple ratios," built in.
+- While dragging, **ratio lines fan out to the active notes**, each labeled with the interval
+  and colored by its consonance — a live read of what you're making against what's sounding.
+- **Click** to drop the note · **right-click background / Esc** to cancel.
 
 ### Lattice axes (5/7-limit)
 
@@ -32,11 +49,18 @@ Click **▶ Play** buttons or any node to hear it (Web Audio).
 
 ## What's here now
 
-- Interactive lattice (pan / zoom / click-to-play)
-- Add-note-by-ratio with live preview + comma-collision warning
+- Interactive lattice (pan / zoom / click-to-play), colored by live consonance
+- Right-click drag-to-tune with scroll-set prime limit and ratio lines to active notes
+- Add-note-by-ratio (typed) with live preview + comma-collision warning
 - Presets: 7-note JI major, 5-note pentatonic, 7-limit (harmonic 7th)
-- Per-note table: ratio, cents, Hz, signed drift from 12-TET
+- Per-note table: ratio, cents, Hz, harmonic distance (HD)
 - In-browser playback (single note, chord of selected, ascending sweep)
+
+## Not here yet (on purpose)
+
+- **No sequencer / tempo / rhythm.** This is a tuning instrument, not a DAW — rhythm is what
+  FL Studio is for, once the tuning bridge below exists.
+- **Nothing is auto-corrected.** No adaptive drift fixing; you place every comma yourself.
 
 ## Roadmap — getting it into FL Studio
 
