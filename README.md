@@ -47,20 +47,50 @@ Click **▶ Play** buttons or any node to hear it (Web Audio).
 - ⟋ diagonal = ×7 (harmonic sevenths)
 - Octaves (×2) are folded out of the layout but kept in the real frequency.
 
+## Ben Johnston notation
+
+Notes are labeled in Ben Johnston's just-intonation notation (nominals = the just
+C-major scale, accidentals applied on top):
+
+- `♯` / `♭` = chromatic semitone 25/24
+- `+` / `−` = syntonic comma 81/80 (the 5-axis)
+- `7` / `L` = septimal inflection 35/36 (the 7-axis; `L` is the inverted-7)
+- `↑` / `↓` = undecimal inflection 33/32 (the 11-axis)
+
+So `7/4` shows as **B♭7**, `11/8` as **F↑**, `81/64` as **E+**, `6/5` as **E♭**.
+Ratios beyond the 13-limit fall back to showing the fraction.
+
+## Sequencer (1-bar loop)
+
+A 16-step, one-bar sequencer is docked at the bottom:
+
+- **BPM** field + **Play/Stop** loop with a moving playhead.
+- One lane per note (labeled with Johnston name + ratio, high pitch at top).
+- **Click a cell** to toggle a hit; cells are tinted by that note's live consonance.
+- **The tune-by-drag works here too**: right-click a lane (or cell) to set it as the
+  source, move vertically to lock a new pitch to a just interval from it, scroll to set
+  the prime limit, then click to drop the note at that step (it's added to the lattice too).
+
+## Navigation
+
+- **Two-finger scroll = pan**, **pinch / ctrl+scroll = zoom**, plus on-screen `+ / − / Fit`.
+- In tune/placement mode, **scroll sets the prime limit** instead (debounced for trackpads).
+
 ## What's here now
 
-- Interactive lattice (pan / zoom / click-to-play), colored by live consonance
-- Right-click drag-to-tune with scroll-set prime limit and ratio lines to active notes
+- Interactive lattice colored by live consonance, with Johnston labels
+- Right-click drag-to-tune (lattice *and* sequencer) with scroll-set prime limit + ratio lines
+- 1-bar 16-step sequencer with tempo, loop, and per-note lanes
 - Add-note-by-ratio (typed) with live preview + comma-collision warning
 - Presets: 7-note JI major, 5-note pentatonic, 7-limit (harmonic 7th)
-- Per-note table: ratio, cents, Hz, harmonic distance (HD)
-- In-browser playback (single note, chord of selected, ascending sweep)
+- Per-note table: Johnston name, ratio, cents, Hz, harmonic distance (HD)
+- In-browser playback (single note, chord of selected)
 
 ## Not here yet (on purpose)
 
-- **No sequencer / tempo / rhythm.** This is a tuning instrument, not a DAW — rhythm is what
-  FL Studio is for, once the tuning bridge below exists.
 - **Nothing is auto-corrected.** No adaptive drift fixing; you place every comma yourself.
+- **No DAW/MIDI output yet.** The sequencer is for sketching; getting these tunings into
+  FL Studio is the roadmap below.
 
 ## Roadmap — getting it into FL Studio
 
