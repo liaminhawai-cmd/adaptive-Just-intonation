@@ -71,6 +71,20 @@ A 16-step, one-bar sequencer is docked at the bottom:
   source, move vertically to lock a new pitch to a just interval from it, scroll to set
   the prime limit, then click to drop the note at that step (it's added to the lattice too).
 
+## The living map
+
+The lattice is not static — it breathes with what you play:
+
+- **Salience**: every note gains salience when played (clicks, chords, sequencer steps)
+  and decays over ~7 seconds. Salience drives each node's **size and opacity**, so
+  recently-used notes stay big and bright while neglected ones shrink and fade.
+- **Follow** (toolbar toggle): the view gently drifts to keep the centre of recent
+  activity in frame. Pauses while you pan or tune manually.
+- **Hub** (toolbar toggle): rings the note with the smallest total ratio-distance
+  (Tenney harmonic distance) to what's currently active — a *harmonic* hub.
+  It is **not** a functional tonal centre / key: a ratio metric can't see voice-leading,
+  meter, or cadence, so it may pick e.g. G where your ear hears C. Treat it as a hint.
+
 ## Navigation
 
 - **Two-finger scroll = pan**, **pinch / ctrl+scroll = zoom**, plus on-screen `+ / − / Fit`.
