@@ -107,23 +107,31 @@ The lattice is not static — it breathes with what you play:
 ## MIDI output → FL Studio (MPE-style, works now)
 
 The sidebar has a **MIDI Output** panel. It uses the Web MIDI API (Chrome/Edge only — Safari and
-Firefox don't support it) to send real MIDI: every played/committed note is spread round-robin
-across MIDI channels **2–16**, each channel individually pitch-bent to the *exact* ratio. This is
-a standard MPE-style trick, so any synth that accepts plain MIDI on multiple channels can play the
-exact tuning — no plugin needed.
+Firefox don't support it) to send real MIDI, pitch-bending each note to its *exact* ratio.
+
+There are two **modes**:
+
+- **Mono** (default) — everything goes out on **channel 1**; before each note the channel is
+  pitch-bent to the ratio. This works with **any** synth (Harmor, FL Keys, Serum, …) because
+  normal synths apply one global pitch bend. It's correct for **one note at a time** (melodies);
+  in a chord, all held notes share the most recent note's bend. This is the mode to use with FL.
+- **MPE** — notes spread round-robin across channels 2–16, each channel bent separately. Only
+  correct if the receiving synth is genuinely in **MPE mode** (per-channel bend). FL's stock synths
+  are *not* MPE, so they'll play the right notes but ignore the per-channel bends (→ 12-TET). Use
+  this only with a real MPE synth.
 
 **Setup:**
 1. Create a virtual MIDI cable so the browser can "wire into" FL:
    - **Windows**: install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html), make a port (e.g. "Lattice").
    - **Mac**: enable the built-in **IAC Driver** (Audio MIDI Setup → MIDI Studio → IAC Driver → check "Device is online").
-2. In this app: **Enable MIDI** → pick that virtual port from **Output device**.
+2. In this app: **Enable MIDI** → pick that virtual port from **Output device** → leave **Mode** on **Mono**.
 3. In FL Studio: set the instrument track's MIDI input to that same virtual port, omni/all channels.
 4. On the synth itself, make sure its **pitch-bend range is set to 2 semitones** (the default for most synths).
    Match the **Pitch-bend range** field in this app's MIDI panel if your synth uses a different default.
 5. Play/click notes or run the sequencer here — FL receives real MIDI notes, each bent to the exact ratio.
 
-Caveats: no note velocity/expression nuance, and rapid dense chords can exhaust the 15-channel
-pool (voices will start round-robin-stealing channels). Fine for melodic/chordal sketching.
+Caveats: Mono mode is monophonic-correct only — for true polyphonic microtonal chords you need a
+real MPE synth (MPE mode) or the MTS-ESP path below. Fine for melodic sketching as-is.
 
 ## Roadmap — a cleaner path later
 

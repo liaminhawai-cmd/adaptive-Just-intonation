@@ -129,15 +129,20 @@
   <h2>Notes <span class="muted" id="count"></span></h2>
   <table id="tbl"><thead><tr><th></th><th>Johnston</th><th>ratio</th><th class="r">cents</th><th class="r">Hz</th><th class="r">HD</th><th></th></tr></thead><tbody></tbody></table>
 
-  <h2>MIDI Output <span class="muted">(MPE → FL Studio)</span></h2>
+  <h2>MIDI Output <span class="muted">(→ FL Studio)</span></h2>
   <div class="row"><button id="midiEnable" class="primary">Enable MIDI</button></div>
   <label>Output device</label>
   <select id="midiOut"></select>
+  <label>Mode</label>
+  <select id="midiMode">
+    <option value="mono" selected>Mono — any synth (Harmor, FL Keys…)</option>
+    <option value="mpe">MPE — per-channel bend (MPE synths only)</option>
+  </select>
   <label>Pitch-bend range (semitones, must match your synth)</label>
   <input id="pbRange" type="number" value="2" min="1" max="96" step="1" />
   <p class="hint" id="midiStatus">Not connected. Route through a virtual MIDI cable (loopMIDI on Windows,
-    IAC Driver on Mac) into FL Studio. Notes spread round-robin across MIDI channels 2–16 (MPE-style),
-    each pitch-bent to the exact ratio — set your FL synth's pitch-bend range to match the field above.</p>
+    IAC Driver on Mac) into FL Studio. <b>Mono</b> mode bends one channel per note — plays one line at a
+    time correctly on any synth. Set your synth's pitch-bend range to match the field above (2 is the default).</p>
 
   <h2>Presets</h2>
   <div class="chips">
@@ -552,8 +557,14 @@ function playFreq(hz,t0,dur,vol=0.22){
 function playNote(n){if(!n)return;bump(n);const hz=noteFreq(n.ratio);playFreq(hz,audio().currentTime,0.6);midiPlay(hz,0.6);}
 function playChord(list){const t=audio().currentTime;list.forEach(n=>{bump(n);const hz=noteFreq(n.ratio);playFreq(hz,t,1.2);midiPlay(hz,1.2);});}
 
-//// ---- MIDI output (MPE-style: round-robin channels 2-16, pitch bend per note) ----
-let midiAccess=null,midiOut=null;
+//// ---- MIDI output --------------------------------------------------------
+// Two modes:
+//  'mono' — everything on channel 1; bend the channel, then play the note. Works with
+//           ANY synth (Harmor, FL Keys, etc.) because they apply one global pitch bend.
+//           Correct for one-note-at-a-time lines; chords share the last note's bend.
+//  'mpe'  — round-robin channels 2-16, a separate bend per channel. Only correct if the
+//           receiving synth is in MPE mode (per-channel bend). FL's normal synths are not.
+let midiAccess=null,midiOut=null,midiMode='mono';
 const MPE_CH=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]; // channels 2-16 (channel 1 left as MPE zone)
 let chRing=0;
 let voiceId=0; const voices=new Map();
@@ -567,7 +578,7 @@ function midiRange(){return parseFloat(document.getElementById('pbRange').value)
 function midiNoteOn(key,hz,vel=100){
   if(!midiOut)return;
   const range=midiRange();
-  const ch=MPE_CH[chRing];chRing=(chRing+1)%MPE_CH.length;
+  const ch=midiMode==='mpe'?MPE_CH[chRing=(chRing+1)%MPE_CH.length]:0; // mono=channel 1
   const m=hzToMidiFloat(hz),base=Math.max(0,Math.min(127,Math.round(m)));
   const bend=Math.max(-1,Math.min(1,(m-base)/range));
   pitchBendRaw(ch,bend);
@@ -579,7 +590,7 @@ function midiNoteOff(key){
   midiSend([0x80|v.ch,v.note,0]);voices.delete(key);
 }
 // one-shot note: on now, off after durSec. Not used for the drag-preview (would spam
-// note-on/off across channels on every mousemove); only committed plays trigger MIDI.
+// note-on/off on every mousemove); only committed plays trigger MIDI.
 function midiPlay(hz,durSec,vel=100){
   if(!midiOut)return;
   const key=++voiceId;
@@ -606,6 +617,7 @@ document.getElementById('midiEnable').onclick=async()=>{
 document.getElementById('midiOut').addEventListener('change',e=>{
   midiOut=midiAccess?midiAccess.outputs.get(e.target.value):null;
 });
+document.getElementById('midiMode').addEventListener('change',e=>{midiMode=e.target.value;});
 
 //// ---- sequencer ----------------------------------------------------------
 const STEPS=16;
