@@ -554,18 +554,11 @@ function playChord(list){const t=audio().currentTime;list.forEach(n=>{bump(n);co
 
 //// ---- MIDI output (MPE-style: round-robin channels 2-16, pitch bend per note) ----
 let midiAccess=null,midiOut=null;
-const MPE_CH=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]; // channel 1 (index0) left free as MPE master/zone channel
+const MPE_CH=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]; // channels 2-16 (channel 1 left as MPE zone)
 let chRing=0;
-const bentRange=new Map(); // channel -> last RPN range sent, so we only resend when it changes
 let voiceId=0; const voices=new Map();
 const hzToMidiFloat=hz=>69+12*log2(hz/440);
 function midiSend(bytes){if(midiOut)midiOut.send(bytes);}
-function setPitchBendRange(ch,semi){
-  const st=Math.max(1,Math.min(96,Math.round(semi)));
-  midiSend([0xB0|ch,101,0]);midiSend([0xB0|ch,100,0]);
-  midiSend([0xB0|ch,6,st]);midiSend([0xB0|ch,38,0]);
-  midiSend([0xB0|ch,101,127]);midiSend([0xB0|ch,100,127]);
-}
 function pitchBendRaw(ch,bend){
   const v=Math.max(0,Math.min(16383,Math.round(8192+bend*8191)));
   midiSend([0xE0|ch,v&0x7f,(v>>7)&0x7f]);
@@ -575,7 +568,6 @@ function midiNoteOn(key,hz,vel=100){
   if(!midiOut)return;
   const range=midiRange();
   const ch=MPE_CH[chRing];chRing=(chRing+1)%MPE_CH.length;
-  if(bentRange.get(ch)!==range){setPitchBendRange(ch,range);bentRange.set(ch,range);}
   const m=hzToMidiFloat(hz),base=Math.max(0,Math.min(127,Math.round(m)));
   const bend=Math.max(-1,Math.min(1,(m-base)/range));
   pitchBendRaw(ch,bend);
@@ -612,9 +604,8 @@ document.getElementById('midiEnable').onclick=async()=>{
   }catch(e){document.getElementById('midiStatus').textContent='MIDI access denied or unsupported in this browser (try Chrome/Edge).';}
 };
 document.getElementById('midiOut').addEventListener('change',e=>{
-  midiOut=midiAccess?midiAccess.outputs.get(e.target.value):null;bentRange.clear();
+  midiOut=midiAccess?midiAccess.outputs.get(e.target.value):null;
 });
-document.getElementById('pbRange').addEventListener('change',()=>bentRange.clear());
 
 //// ---- sequencer ----------------------------------------------------------
 const STEPS=16;

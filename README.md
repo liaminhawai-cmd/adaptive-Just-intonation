@@ -108,9 +108,9 @@ The lattice is not static — it breathes with what you play:
 
 The sidebar has a **MIDI Output** panel. It uses the Web MIDI API (Chrome/Edge only — Safari and
 Firefox don't support it) to send real MIDI: every played/committed note is spread round-robin
-across MIDI channels **2–16**, each channel individually pitch-bent to the *exact* ratio via RPN
-pitch-bend-range + a bend message. This is a standard MPE-style trick, so any synth that accepts
-plain MIDI on multiple channels can play the exact tuning — no plugin needed.
+across MIDI channels **2–16**, each channel individually pitch-bent to the *exact* ratio. This is
+a standard MPE-style trick, so any synth that accepts plain MIDI on multiple channels can play the
+exact tuning — no plugin needed.
 
 **Setup:**
 1. Create a virtual MIDI cable so the browser can "wire into" FL:
@@ -118,9 +118,9 @@ plain MIDI on multiple channels can play the exact tuning — no plugin needed.
    - **Mac**: enable the built-in **IAC Driver** (Audio MIDI Setup → MIDI Studio → IAC Driver → check "Device is online").
 2. In this app: **Enable MIDI** → pick that virtual port from **Output device**.
 3. In FL Studio: set the instrument track's MIDI input to that same virtual port, omni/all channels.
-4. On the synth itself, set its **pitch-bend range** to match the number in this app's
-   **Pitch-bend range** field (2 semitones is the safe default most synths already use).
-5. Play/click notes or run the sequencer here — FL receives real MIDI notes, bent to the ratio.
+4. On the synth itself, make sure its **pitch-bend range is set to 2 semitones** (the default for most synths).
+   Match the **Pitch-bend range** field in this app's MIDI panel if your synth uses a different default.
+5. Play/click notes or run the sequencer here — FL receives real MIDI notes, each bent to the exact ratio.
 
 Caveats: no note velocity/expression nuance, and rapid dense chords can exhaust the 15-channel
 pool (voices will start round-robin-stealing channels). Fine for melodic/chordal sketching.
