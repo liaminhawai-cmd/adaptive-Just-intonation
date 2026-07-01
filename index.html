@@ -62,6 +62,9 @@
   .node.sel circle{stroke:#fff;stroke-width:2.5}
   .node.ref circle{stroke:var(--acc2);stroke-width:3}
   .node.active circle{stroke:#fff;stroke-width:2}
+  .node.hub circle{stroke:#c79bff;stroke-width:3.5}
+  .toolbar button.tgl{color:var(--acc2);border-color:#3a4154}
+  .toolbar button.tgl.off{color:var(--dim);opacity:.6}
   .ribbon{stroke:#3a4154;stroke-width:1;stroke-dasharray:3 4}
   .tick{stroke:#3a4154;stroke-width:1}
   .tick.cur{stroke:var(--acc2);stroke-width:2}
@@ -139,6 +142,8 @@
 <div class="stage">
   <div class="latwrap">
     <div class="toolbar">
+      <button id="followBtn" class="ghost tgl" title="Drift the view to follow recent activity">Follow</button>
+      <button id="hubBtn" class="ghost tgl" title="Ring the harmonic hub: the note nearest (in ratio-distance) to what's active. Not a functional key.">Hub</button>
       <button id="zin" class="ghost">+</button>
       <button id="zout" class="ghost">−</button>
       <button id="fit" class="ghost">Fit</button>
@@ -237,29 +242,30 @@ let notes=[]; let nextId=1; let selected=new Set();
 const NOW=()=>performance.now();
 function rootFreq(){return parseFloat(document.getElementById('rootFreq').value)||261.63;}
 function rootName(){return document.getElementById('rootName').value||'C';}
-function addRoot(){notes=[{id:0,ratio:fr(1,1),parent:null,interval:fr(1,1),name:rootName(),played:0}];nextId=1;selected.clear();seqHits.clear();}
+const SAL_FLOOR=0.28, SAL_MAX=3;   // salience never fully dies; caps at SAL_MAX
+function addRoot(){notes=[{id:0,ratio:fr(1,1),parent:null,interval:fr(1,1),name:rootName(),salience:0.8}];nextId=1;selected.clear();seqHits.clear();}
 function noteFreq(f){return rootFreq()*f.n/f.d;}
 function nameOf(n){return n.id===0?rootName():johnston(n.ratio);}
+function bump(n){if(n)n.salience=Math.min(SAL_MAX,(n.salience||0)+1);}
 
 function addNote(parentId,interval){
   const p=notes.find(n=>n.id===parentId); if(!p)return null;
   const ratio=mul(p.ratio,interval);
   // dedupe: if a note with this ratio exists, reuse it
   const ex=notes.find(n=>eqf(n.ratio,ratio));
-  if(ex){selected.clear();selected.add(ex.id);render();return ex;}
+  if(ex){selected.clear();selected.add(ex.id);bump(ex);render();return ex;}
   const id=nextId++;
-  const note={id,ratio,parent:parentId,interval,name:johnston(ratio),played:0};
+  const note={id,ratio,parent:parentId,interval,name:johnston(ratio),salience:1.2};
   notes.push(note);selected.clear();selected.add(id);render();return note;
 }
 
 //// ---- active context -----------------------------------------------------
+// weight = salience (decaying recency accumulator) + a boost while selected.
 function activeContext(){
-  const t=NOW(),out=[];
+  const out=[];
   notes.forEach(n=>{
-    let w=0;
-    if(selected.has(n.id))w=1;
-    if(n.played){const age=(t-n.played)/1000;if(age<4)w=Math.max(w,Math.exp(-age/1.6));}
-    if(w>0.02)out.push({ratio:n.ratio,w,id:n.id});
+    let w=(n.salience||0)+(selected.has(n.id)?1.5:0);
+    if(w>0.04)out.push({ratio:n.ratio,w,id:n.id});
   });
   if(!out.length&&notes[0])out.push({ratio:notes[0].ratio,w:1,id:0});
   return out;
@@ -374,27 +380,66 @@ function renderPreview(){
 }
 
 //// ---- lattice scene ------------------------------------------------------
+// Structure is built once per model change (renderScene); per-frame visuals
+// (size/fade/colour from salience) are updated cheaply by paintNodes().
+let nodeEls={};
+function applyTransform(){const w=document.getElementById('world');
+  if(w)w.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`);}
 function renderScene(){
   const pos={};notes.forEach(n=>pos[n.id]=latticeXY(n.ratio));
-  let edges='',nodes='',overlay='';
+  let edges='';
   notes.forEach(n=>{if(n.parent!=null){const a=pos[n.parent],b=pos[n.id];if(a&&b)
     edges+=`<line class="edge" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`;}});
-  const act=new Set(activeContext().map(c=>c.id));
-  notes.forEach(n=>{
-    const p=pos[n.id];
-    const cls='node'+(selected.has(n.id)?' sel':'')+(n.id===0?' ref':'')+(act.has(n.id)?' active':'');
-    nodes+=`<g class="${cls}" data-id="${n.id}" transform="translate(${p.x},${p.y})">
-      <circle r="22" fill="${consonanceColor(nodeHD(n))}"/>
+  let nodes='';
+  notes.forEach(n=>{const p=pos[n.id];
+    nodes+=`<g class="node" data-id="${n.id}" transform="translate(${p.x},${p.y})">
+      <circle r="22"/>
       <text class="nlabel" text-anchor="middle" y="0">${nameOf(n)}</text>
-      <text class="ncents" text-anchor="middle" y="11">${n.ratio.n}/${n.ratio.d}</text></g>`;
-  });
-  if(tune.on)overlay=renderTuningOverlay(pos);
-  svg.innerHTML=`<g transform="translate(${view.x},${view.y}) scale(${view.k})">${edges}${nodes}${overlay}</g>`;
+      <text class="ncents" text-anchor="middle" y="11">${n.ratio.n}/${n.ratio.d}</text></g>`;});
+  svg.innerHTML=`<g id="world" transform="translate(${view.x},${view.y}) scale(${view.k})">`+
+    `<g id="edges">${edges}</g><g id="nodeLayer">${nodes}</g><g id="overlay"></g></g>`;
+  nodeEls={};
   svg.querySelectorAll('.node').forEach(g=>{
     const id=+g.dataset.id;
+    nodeEls[id]={g,circle:g.querySelector('circle'),label:g.querySelector('.nlabel'),sub:g.querySelector('.ncents')};
     g.addEventListener('click',()=>{if(tune.on)return;toggleSel(id);playNote(notes.find(x=>x.id===id));});
     g.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();startTune(id);});
   });
+  paintNodes();
+  if(tune.on)renderTuningOverlay();
+}
+// the living map: size + fade + colour driven by salience and context
+function paintNodes(){
+  const act=new Set(activeContext().filter(c=>c.w>0.6).map(c=>c.id));
+  const hub=hubOn?impliedHub():null;
+  notes.forEach(n=>{const el=nodeEls[n.id];if(!el)return;
+    let sal=n.salience||0;
+    if(selected.has(n.id))sal=Math.max(sal,1.5);
+    if(hub&&hub.id===n.id)sal=Math.max(sal,0.95);
+    const f=sal/(sal+1.1);
+    const r=9+16*f, op=0.2+0.8*Math.min(1,sal/1.25);
+    el.circle.setAttribute('r',r.toFixed(2));
+    el.circle.setAttribute('fill',consonanceColor(nodeHD(n)));
+    el.g.setAttribute('opacity',op.toFixed(3));
+    el.g.setAttribute('class','node'+(selected.has(n.id)?' sel':'')+(n.id===0?' ref':'')
+      +(act.has(n.id)?' active':'')+(hub&&hub.id===n.id?' hub':''));
+    el.label.setAttribute('font-size',(9.5+3*f).toFixed(1));
+  });
+}
+// salience-weighted centre of activity (for Follow mode)
+function salientCentroid(){let sx=0,sy=0,sw=0;
+  notes.forEach(n=>{const w=(n.salience||0)+(selected.has(n.id)?1.5:0);
+    if(w>0.05){const p=latticeXY(n.ratio);sx+=p.x*w;sy+=p.y*w;sw+=w;}});
+  return sw>0.3?{x:sx/sw,y:sy/sw}:null;}
+// harmonic hub: existing note minimising total weighted Tenney distance to the active set.
+// NB: this is a ratio-distance hub, NOT a music-theory functional tonal centre.
+function impliedHub(){
+  const ws=notes.map(n=>({n,w:(n.salience||0)+(selected.has(n.id)?1.5:0)})).filter(o=>o.w>0.05);
+  if(ws.length<2)return null;
+  let best=null,bc=1e9;
+  notes.forEach(c=>{let s=0;ws.forEach(o=>{if(o.n.id!==c.id)s+=o.w*intervalHD(o.n.ratio,c.ratio);});
+    if(s<bc){bc=s;best=c;}});
+  return best;
 }
 function fitView(){
   if(!notes.length)return;
@@ -403,20 +448,24 @@ function fitView(){
   const minx=Math.min(...xs)-70,maxx=Math.max(...xs)+70,miny=Math.min(...ys)-70,maxy=Math.max(...ys)+70;
   const w=svg.clientWidth,h=svg.clientHeight;
   const k=Math.min(2,Math.min(w/(maxx-minx||1),h/(maxy-miny||1)));
-  view.k=k;view.x=w/2-(minx+maxx)/2*k;view.y=h/2-(miny+maxy)/2*k;renderScene();
+  view.k=k;view.x=w/2-(minx+maxx)/2*k;view.y=h/2-(miny+maxy)/2*k;
+  manualPanUntil=NOW()+1800;applyTransform();
 }
-function zoomAt(cx,cy,f){view.x=cx-(cx-view.x)*f;view.y=cy-(cy-view.y)*f;view.k*=f;renderScene();}
+function zoomAt(cx,cy,f){view.x=cx-(cx-view.x)*f;view.y=cy-(cy-view.y)*f;view.k*=f;
+  manualPanUntil=NOW()+1800;applyTransform();}
 
 //// ---- drag-to-tune (lattice) ---------------------------------------------
 let tune={on:false,parent:null,level:2,cands:[],cur:null,lastKey:'',acc:0};
 function startTune(parentId){
   const p=notes.find(n=>n.id===parentId);if(!p)return;
   tune={on:true,parent:p,level:tune.level??2,cands:genCandidates(tune.level??2),cur:null,lastKey:'',acc:0};
-  svg.classList.add('tuning');showLimit();renderScene();
+  svg.classList.add('tuning');showLimit();renderTuningOverlay();
 }
 function endTune(commit){
-  if(commit&&tune.cur){addNote(tune.parent.id,tune.cur.ratio);fitView();}
-  tune.on=false;svg.classList.remove('tuning');document.getElementById('limitbox').classList.remove('on');renderScene();
+  const cur=tune.cur,parent=tune.parent;
+  tune.on=false;svg.classList.remove('tuning');document.getElementById('limitbox').classList.remove('on');
+  if(commit&&cur){addNote(parent.id,cur.ratio);}      // addNote re-renders
+  else renderTuningOverlay();                          // just clear the overlay
 }
 function showLimit(){
   const b=document.getElementById('limitbox');
@@ -432,7 +481,7 @@ function updateTune(clientX,clientY){
   tune.cur=snapPick(tune.cands,targetCents);
   const key=tune.cur?tune.cur.ratio.n+'/'+tune.cur.ratio.d:'';
   if(key&&key!==tune.lastKey){tune.lastKey=key;previewTune();}
-  renderScene();
+  renderTuningOverlay();
 }
 function previewTune(){
   if(!tune.cur)return;
@@ -440,7 +489,10 @@ function previewTune(){
   playFreq(noteFreq(f),audio().currentTime,0.45,0.22);
   activeContext().forEach(c=>{if(c.id!==tune.parent.id)playFreq(noteFreq(c.ratio),audio().currentTime,0.45,0.05);});
 }
-function renderTuningOverlay(pos){
+function renderTuningOverlay(){
+  const ov=document.getElementById('overlay');if(!ov)return;
+  if(!tune.on){ov.innerHTML='';return;}
+  const pos={};notes.forEach(n=>pos[n.id]=latticeXY(n.ratio));
   const pp=latticeXY(tune.parent.ratio);let s='';
   const top=pp.y-2450*PXCENT,bot=pp.y+1250*PXCENT;
   s+=`<line class="ribbon" x1="${pp.x}" y1="${top}" x2="${pp.x}" y2="${bot}"/>`;
@@ -464,7 +516,7 @@ function renderTuningOverlay(pos){
       <text class="nlabel" text-anchor="middle" y="0">${johnston(gf)}</text>
       <text class="ncents" text-anchor="middle" y="11">${gf.n}/${gf.d}</text></g>`;
   }
-  return s;
+  ov.innerHTML=s;
 }
 
 //// ---- selection / delete -------------------------------------------------
@@ -487,8 +539,8 @@ function playFreq(hz,t0,dur,vol=0.22){
   g.gain.exponentialRampToValueAtTime(0.0008,t0+dur);
   o.connect(g).connect(a.destination);o.start(t0);o.stop(t0+dur+0.05);
 }
-function playNote(n){if(!n)return;n.played=NOW();playFreq(noteFreq(n.ratio),audio().currentTime,0.6);render();}
-function playChord(list){const t=audio().currentTime;list.forEach(n=>{n.played=NOW();playFreq(noteFreq(n.ratio),t,1.2);});render();}
+function playNote(n){if(!n)return;bump(n);playFreq(noteFreq(n.ratio),audio().currentTime,0.6);}
+function playChord(list){const t=audio().currentTime;list.forEach(n=>{bump(n);playFreq(noteFreq(n.ratio),t,1.2);});}
 
 //// ---- sequencer ----------------------------------------------------------
 const STEPS=16;
@@ -594,7 +646,7 @@ function seqStart(){
   const tick=()=>{
     seq.cur=(seq.cur+1)%STEPS;
     const t=audio().currentTime;
-    notes.forEach(n=>{if(seqHits.has(n.id+':'+seq.cur))playFreq(noteFreq(n.ratio),t,Math.min(0.9,stepMs()/1000*2),0.2);});
+    notes.forEach(n=>{if(seqHits.has(n.id+':'+seq.cur)){bump(n);playFreq(noteFreq(n.ratio),t,Math.min(0.9,stepMs()/1000*2),0.2);}});
     updatePlayCells();
     seq.timer=setTimeout(tick,stepMs());
   };
@@ -655,7 +707,8 @@ svg.addEventListener('mousedown',e=>{
 window.addEventListener('mousemove',e=>{
   if(tune.on){updateTune(e.clientX,e.clientY);return;}
   if(place.on){updatePlace(e.clientX,e.clientY);return;}
-  if(!drag)return;view.x=drag.vx+(e.clientX-drag.x);view.y=drag.vy+(e.clientY-drag.y);renderScene();
+  if(!drag)return;view.x=drag.vx+(e.clientX-drag.x);view.y=drag.vy+(e.clientY-drag.y);
+  manualPanUntil=NOW()+1800;applyTransform();
 });
 window.addEventListener('mouseup',()=>{drag=null;svg.classList.remove('drag');});
 svg.addEventListener('contextmenu',e=>{if(tune.on){e.preventDefault();endTune(false);}});
@@ -668,7 +721,7 @@ svg.addEventListener('wheel',e=>{
   e.preventDefault();
   if(tune.on){steppedLimit(tune,e.deltaY,()=>{showLimit();updateTune(e.clientX,e.clientY);});return;}
   if(e.ctrlKey){const r=svg.getBoundingClientRect();zoomAt(e.clientX-r.left,e.clientY-r.top,e.deltaY<0?1.08:1/1.08);return;}
-  view.x-=e.deltaX;view.y-=e.deltaY;renderScene(); // two-finger scroll pans
+  view.x-=e.deltaX;view.y-=e.deltaY;manualPanUntil=NOW()+1800;applyTransform(); // two-finger scroll pans
 },{passive:false});
 
 // sequencer placement scroll = limit
@@ -679,11 +732,36 @@ grid.addEventListener('wheel',e=>{
 grid.addEventListener('contextmenu',e=>{if(place.on&&!e.target.closest('.cell')&&!e.target.closest('.lanelbl')){e.preventDefault();cancelPlace();}});
 window.addEventListener('resize',()=>{renderScene();drawPlayhead();drawPlaceGhost();});
 
+// living-map toggles
+let followOn=true,hubOn=true,manualPanUntil=0;
+document.getElementById('followBtn').onclick=function(){followOn=!followOn;this.classList.toggle('off',!followOn);};
+document.getElementById('hubBtn').onclick=function(){hubOn=!hubOn;this.classList.toggle('off',!hubOn);paintNodes();};
+
+//// ---- animation loop: salience decay drives size/fade/colour + Follow ----
+const TAU=7; // seconds for salience to fall to ~37%
+let lastT=performance.now();
+function animate(){
+  const t=performance.now(),dt=Math.min(0.08,(t-lastT)/1000);lastT=t;
+  const dec=Math.exp(-dt/TAU);
+  notes.forEach(n=>{n.salience=Math.max(SAL_FLOOR,(n.salience||0)*dec);});
+  if(nodeEls&&Object.keys(nodeEls).length)paintNodes();
+  if(tune.on)renderTuningOverlay();
+  if(followOn&&!tune.on&&!place.on&&t>manualPanUntil){
+    const c=salientCentroid();
+    if(c){const w=svg.clientWidth,h=svg.clientHeight;
+      const tx=w/2-c.x*view.k, ty=h/2-c.y*view.k;
+      view.x+=(tx-view.x)*0.02;view.y+=(ty-view.y)*0.02;applyTransform();}
+  }
+  requestAnimationFrame(animate);
+}
+
 // expose for tests
-window.__t={genCandidates,intervalHD,consonanceColor,johnston,fr,mul,cents,snapPick,get notes(){return notes;},get seqHits(){return seqHits;},get place(){return place;}};
+window.__t={genCandidates,intervalHD,consonanceColor,johnston,fr,mul,cents,snapPick,impliedHub,
+  get notes(){return notes;},get seqHits(){return seqHits;},get place(){return place;},bump,paintNodes};
 
 //// ---- go -----------------------------------------------------------------
 loadPreset('major7');
+requestAnimationFrame(animate);
 </script>
 </body>
 </html>
