@@ -129,6 +129,16 @@
   <h2>Notes <span class="muted" id="count"></span></h2>
   <table id="tbl"><thead><tr><th></th><th>Johnston</th><th>ratio</th><th class="r">cents</th><th class="r">Hz</th><th class="r">HD</th><th></th></tr></thead><tbody></tbody></table>
 
+  <h2>MIDI Output <span class="muted">(MPE → FL Studio)</span></h2>
+  <div class="row"><button id="midiEnable" class="primary">Enable MIDI</button></div>
+  <label>Output device</label>
+  <select id="midiOut"></select>
+  <label>Pitch-bend range (semitones, must match your synth)</label>
+  <input id="pbRange" type="number" value="2" min="1" max="96" step="1" />
+  <p class="hint" id="midiStatus">Not connected. Route through a virtual MIDI cable (loopMIDI on Windows,
+    IAC Driver on Mac) into FL Studio. Notes spread round-robin across MIDI channels 2–16 (MPE-style),
+    each pitch-bent to the exact ratio — set your FL synth's pitch-bend range to match the field above.</p>
+
   <h2>Presets</h2>
   <div class="chips">
     <button class="chip ghost" data-preset="major7">7-note JI major</button>
@@ -539,8 +549,72 @@ function playFreq(hz,t0,dur,vol=0.22){
   g.gain.exponentialRampToValueAtTime(0.0008,t0+dur);
   o.connect(g).connect(a.destination);o.start(t0);o.stop(t0+dur+0.05);
 }
-function playNote(n){if(!n)return;bump(n);playFreq(noteFreq(n.ratio),audio().currentTime,0.6);}
-function playChord(list){const t=audio().currentTime;list.forEach(n=>{bump(n);playFreq(noteFreq(n.ratio),t,1.2);});}
+function playNote(n){if(!n)return;bump(n);const hz=noteFreq(n.ratio);playFreq(hz,audio().currentTime,0.6);midiPlay(hz,0.6);}
+function playChord(list){const t=audio().currentTime;list.forEach(n=>{bump(n);const hz=noteFreq(n.ratio);playFreq(hz,t,1.2);midiPlay(hz,1.2);});}
+
+//// ---- MIDI output (MPE-style: round-robin channels 2-16, pitch bend per note) ----
+let midiAccess=null,midiOut=null;
+const MPE_CH=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]; // channel 1 (index0) left free as MPE master/zone channel
+let chRing=0;
+const bentRange=new Map(); // channel -> last RPN range sent, so we only resend when it changes
+let voiceId=0; const voices=new Map();
+const hzToMidiFloat=hz=>69+12*log2(hz/440);
+function midiSend(bytes){if(midiOut)midiOut.send(bytes);}
+function setPitchBendRange(ch,semi){
+  const st=Math.max(1,Math.min(96,Math.round(semi)));
+  midiSend([0xB0|ch,101,0]);midiSend([0xB0|ch,100,0]);
+  midiSend([0xB0|ch,6,st]);midiSend([0xB0|ch,38,0]);
+  midiSend([0xB0|ch,101,127]);midiSend([0xB0|ch,100,127]);
+}
+function pitchBendRaw(ch,bend){
+  const v=Math.max(0,Math.min(16383,Math.round(8192+bend*8191)));
+  midiSend([0xE0|ch,v&0x7f,(v>>7)&0x7f]);
+}
+function midiRange(){return parseFloat(document.getElementById('pbRange').value)||2;}
+function midiNoteOn(key,hz,vel=100){
+  if(!midiOut)return;
+  const range=midiRange();
+  const ch=MPE_CH[chRing];chRing=(chRing+1)%MPE_CH.length;
+  if(bentRange.get(ch)!==range){setPitchBendRange(ch,range);bentRange.set(ch,range);}
+  const m=hzToMidiFloat(hz),base=Math.max(0,Math.min(127,Math.round(m)));
+  const bend=Math.max(-1,Math.min(1,(m-base)/range));
+  pitchBendRaw(ch,bend);
+  midiSend([0x90|ch,base,Math.max(1,Math.min(127,Math.round(vel)))]);
+  voices.set(key,{ch,note:base});
+}
+function midiNoteOff(key){
+  const v=voices.get(key);if(!v)return;
+  midiSend([0x80|v.ch,v.note,0]);voices.delete(key);
+}
+// one-shot note: on now, off after durSec. Not used for the drag-preview (would spam
+// note-on/off across channels on every mousemove); only committed plays trigger MIDI.
+function midiPlay(hz,durSec,vel=100){
+  if(!midiOut)return;
+  const key=++voiceId;
+  midiNoteOn(key,hz,vel);
+  setTimeout(()=>midiNoteOff(key),Math.max(30,durSec*1000));
+}
+function populateMidiOutputs(){
+  const sel=document.getElementById('midiOut');sel.innerHTML='';
+  if(!midiAccess)return;
+  midiAccess.outputs.forEach(o=>{const opt=document.createElement('option');opt.value=o.id;opt.textContent=o.name;sel.appendChild(opt);});
+  const first=[...midiAccess.outputs.values()][0];
+  if(first){midiOut=first;sel.value=first.id;}
+  document.getElementById('midiStatus').textContent=midiAccess.outputs.size
+    ?`Connected · ${midiAccess.outputs.size} output(s) found.`
+    :'MIDI enabled, but no output devices found — set up a virtual MIDI cable first.';
+}
+document.getElementById('midiEnable').onclick=async()=>{
+  try{
+    midiAccess=await navigator.requestMIDIAccess({sysex:false});
+    populateMidiOutputs();
+    midiAccess.onstatechange=populateMidiOutputs;
+  }catch(e){document.getElementById('midiStatus').textContent='MIDI access denied or unsupported in this browser (try Chrome/Edge).';}
+};
+document.getElementById('midiOut').addEventListener('change',e=>{
+  midiOut=midiAccess?midiAccess.outputs.get(e.target.value):null;bentRange.clear();
+});
+document.getElementById('pbRange').addEventListener('change',()=>bentRange.clear());
 
 //// ---- sequencer ----------------------------------------------------------
 const STEPS=16;
@@ -646,7 +720,7 @@ function seqStart(){
   const tick=()=>{
     seq.cur=(seq.cur+1)%STEPS;
     const t=audio().currentTime;
-    notes.forEach(n=>{if(seqHits.has(n.id+':'+seq.cur)){bump(n);playFreq(noteFreq(n.ratio),t,Math.min(0.9,stepMs()/1000*2),0.2);}});
+    notes.forEach(n=>{if(seqHits.has(n.id+':'+seq.cur)){bump(n);const hz=noteFreq(n.ratio),dur=Math.min(0.9,stepMs()/1000*2);playFreq(hz,t,dur,0.2);midiPlay(hz,dur);}});
     updatePlayCells();
     seq.timer=setTimeout(tick,stepMs());
   };

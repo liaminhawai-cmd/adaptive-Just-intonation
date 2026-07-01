@@ -103,22 +103,36 @@ The lattice is not static — it breathes with what you play:
 ## Not here yet (on purpose)
 
 - **Nothing is auto-corrected.** No adaptive drift fixing; you place every comma yourself.
-- **No DAW/MIDI output yet.** The sequencer is for sketching; getting these tunings into
-  FL Studio is the roadmap below.
 
-## Roadmap — getting it into FL Studio
+## MIDI output → FL Studio (MPE-style, works now)
 
-The prototype is the "brain." To actually play synths from it:
+The sidebar has a **MIDI Output** panel. It uses the Web MIDI API (Chrome/Edge only — Safari and
+Firefox don't support it) to send real MIDI: every played/committed note is spread round-robin
+across MIDI channels **2–16**, each channel individually pitch-bent to the *exact* ratio via RPN
+pitch-bend-range + a bend message. This is a standard MPE-style trick, so any synth that accepts
+plain MIDI on multiple channels can play the exact tuning — no plugin needed.
 
-1. **MPE / per-channel pitch-bend out** — universal: works with any synth in FL by spreading
-   notes across MIDI channels and bending each to its ratio. Crude but works everywhere.
-2. **MTS-ESP master** — the clean path. ODDSound open-sourced the MTS-ESP library; building a
-   small master plugin lets MTS-ESP-aware synths (Surge XT, u-he, etc.) read our exact tuning
-   in real time. FL itself has no native microtuning/SysEx, but these run inside it as VSTs.
-3. **Export** — Scala `.scl`/`.kbm` and `.tun` files for static snapshots of a scale.
+**Setup:**
+1. Create a virtual MIDI cable so the browser can "wire into" FL:
+   - **Windows**: install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html), make a port (e.g. "Lattice").
+   - **Mac**: enable the built-in **IAC Driver** (Audio MIDI Setup → MIDI Studio → IAC Driver → check "Device is online").
+2. In this app: **Enable MIDI** → pick that virtual port from **Output device**.
+3. In FL Studio: set the instrument track's MIDI input to that same virtual port, omni/all channels.
+4. On the synth itself, set its **pitch-bend range** to match the number in this app's
+   **Pitch-bend range** field (2 semitones is the safe default most synths already use).
+5. Play/click notes or run the sequencer here — FL receives real MIDI notes, bent to the ratio.
 
-(Those steps are native/plugin code you'd build and run on your own machine; this repo is the
-engine + UI that drives them.)
+Caveats: no note velocity/expression nuance, and rapid dense chords can exhaust the 15-channel
+pool (voices will start round-robin-stealing channels). Fine for melodic/chordal sketching.
+
+## Roadmap — a cleaner path later
+
+1. **MTS-ESP master** — the tidy alternative to per-channel MPE bending. ODDSound open-sourced the
+   MTS-ESP library; a small master plugin would let MTS-ESP-aware synths (Surge XT, u-he, etc.)
+   read our exact tuning table directly, with full velocity/expression intact. FL itself has no
+   native microtuning/SysEx, but these run inside it as VSTs. This is native/plugin code you'd
+   build separately — this repo is the engine + UI that would drive it.
+2. **Export** — Scala `.scl`/`.kbm` and `.tun` files for static snapshots of a scale.
 
 ## Why not just use Infinitone DMT / MTS-ESP?
 
