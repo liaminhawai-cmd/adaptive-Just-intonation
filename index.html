@@ -81,13 +81,14 @@
   /* sequencer */
   #seq{height:236px;border-top:1px solid var(--line);background:var(--panel);
        display:flex;flex-direction:column;position:relative}
-  .seqhead{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)}
+  .seqhead{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
   .seqhead button{width:auto;padding:6px 12px}
+  .seqhead select{width:auto;padding:5px 7px}
   .seqhead .t{color:var(--dim);font-size:12px}
   .seqhead input[type=number]{width:64px;padding:5px 7px}
   .seqbanner{color:var(--acc2);font-size:12px;margin-left:auto}
   .seqgrid{flex:1;overflow:auto;position:relative}
-  .lane{display:grid;grid-template-columns:118px repeat(16,1fr);height:24px;border-bottom:1px solid #20242f}
+  .lane{display:grid;height:24px;border-bottom:1px solid #20242f}
   .lane.src{background:#241f12}
   .lanelbl{display:flex;align-items:center;gap:6px;padding:0 8px;font-size:12px;
        border-right:1px solid var(--line);cursor:context-menu;white-space:nowrap;overflow:hidden}
@@ -180,7 +181,9 @@
     <div class="seqhead">
       <button id="seqPlay" class="primary">▶ Play</button>
       <span class="t">BPM</span><input id="bpm" type="number" value="100" min="20" max="300" step="1"/>
-      <span class="t">1 bar · 16 steps</span>
+      <span class="t">bars</span><select id="seqBars"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select>
+      <button id="seqZin" class="ghost" style="width:auto;padding:6px 8px" title="Zoom in">+</button>
+      <button id="seqZout" class="ghost" style="width:auto;padding:6px 8px" title="Zoom out">−</button>
       <button id="seqClear" class="ghost">clear</button>
       <span class="seqbanner" id="seqBanner"></span>
     </div>
@@ -270,8 +273,18 @@ function addNote(parentId,interval){
   const ex=notes.find(n=>eqf(n.ratio,ratio));
   if(ex){selected.clear();selected.add(ex.id);bump(ex);render();return ex;}
   const id=nextId++;
-  const note={id,ratio,parent:parentId,interval,name:johnston(ratio),salience:1.2};
-  notes.push(note);selected.clear();selected.add(id);render();return note;
+  const note={id,ratio,parent:parentId,interval,name:johnston(ratio),salience:1.2,octaveRoot:id};
+  notes.push(note);
+  // auto-generate octaves: ±2 octaves
+  for(let o=-2;o<=2;o++){
+    if(o===0)continue;
+    const octRatio=o>0?mul(ratio,fr(Math.pow(2,o),1)):mul(ratio,fr(1,Math.pow(2,-o)));
+    const octId=nextId++;
+    const octNote={id:octId,ratio:octRatio,parent:parentId,interval:mul(interval,fr(Math.pow(2,o),1)),
+      name:johnston(octRatio),salience:0.6,octaveRoot:id,octaveShift:o};
+    notes.push(octNote);
+  }
+  selected.clear();selected.add(id);render();return note;
 }
 
 //// ---- active context -----------------------------------------------------
@@ -620,7 +633,8 @@ document.getElementById('midiOut').addEventListener('change',e=>{
 document.getElementById('midiMode').addEventListener('change',e=>{midiMode=e.target.value;});
 
 //// ---- sequencer ----------------------------------------------------------
-const STEPS=16;
+let STEPS=16;
+let seqZoom=1;  // cell width multiplier
 let seqHits=new Set();           // "noteId:step"
 let seq={playing:false,timer:null,cur:-1};
 let place={on:false,src:null,level:2,cands:[],cur:null,step:0,acc:0};
@@ -636,10 +650,12 @@ function laneRows(){return notes.slice().sort((a,b)=>cents(b.ratio)-cents(a.rati
 
 function renderSeq(){
   const rows=laneRows();
+  const cellW=18*seqZoom;
+  const gridCols=`118px repeat(${STEPS},${cellW}px)`;
   let html='';
   rows.forEach(n=>{
     const isSrc=place.on&&place.src&&place.src.id===n.id;
-    html+=`<div class="lane${isSrc?' src':''}" data-id="${n.id}">
+    html+=`<div class="lane${isSrc?' src':''}" data-id="${n.id}" style="grid-template-columns:${gridCols}">
       <div class="lanelbl" data-id="${n.id}"><span class="jn">${nameOf(n)}</span><span class="rt">${n.ratio.n}/${n.ratio.d}</span></div>`;
     for(let s=0;s<STEPS;s++){
       const on=seqHits.has(n.id+':'+s);
@@ -670,8 +686,8 @@ function drawPlayhead(){
   let ph=grid.querySelector('.ph');
   if(seq.cur<0){if(ph)ph.remove();return;}
   if(!ph){ph=document.createElement('div');ph.className='ph';grid.appendChild(ph);}
-  const lblW=118,colW=(grid.clientWidth-lblW)/STEPS;
-  ph.style.left=(lblW+seq.cur*colW)+'px';
+  const cellW=18*seqZoom;
+  ph.style.left=(118+seq.cur*cellW)+'px';
 }
 //// placement (tune-by-drag inside the sequencer)
 function startPlace(srcId){
@@ -688,8 +704,8 @@ function updatePlace(clientX,clientY){
   const targetAbs=hi-fracY*(hi-lo);                    // top=hi
   const targetRel=targetAbs-cents(place.src.ratio);    // interval cents from source
   place.cur=snapPick(place.cands,targetRel);
-  const lblW=118,colW=(r.width-lblW)/STEPS;
-  place.step=Math.min(STEPS-1,Math.max(0,Math.floor((clientX-r.left-lblW)/colW)));
+  const cellW=18*seqZoom;
+  place.step=Math.min(STEPS-1,Math.max(0,Math.floor((clientX-r.left-118)/cellW)));
   if(place.step<0)place.step=0;
   drawPlaceGhost();
 }
@@ -772,6 +788,9 @@ document.getElementById('zout').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientH
 document.getElementById('seqPlay').onclick=()=>{seq.playing?seqStop():seqStart();};
 document.getElementById('seqClear').onclick=()=>{seqHits.clear();renderSeq();};
 document.getElementById('bpm').addEventListener('change',()=>{});
+document.getElementById('seqBars').addEventListener('change',e=>{STEPS=parseInt(e.target.value)*16;render();});
+document.getElementById('seqZin').onclick=()=>{seqZoom=Math.min(2,seqZoom*1.2);render();};
+document.getElementById('seqZout').onclick=()=>{seqZoom=Math.max(0.5,seqZoom/1.2);render();};
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(tune.on)endTune(false);if(place.on)cancelPlace();}});
 
 // lattice pan/zoom/tune
