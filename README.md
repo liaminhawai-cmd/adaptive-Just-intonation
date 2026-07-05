@@ -60,16 +60,45 @@ C-major scale, accidentals applied on top):
 So `7/4` shows as **B♭7**, `11/8` as **F↑**, `81/64` as **E+**, `6/5` as **E♭**.
 Ratios beyond the 13-limit fall back to showing the fraction.
 
-## Sequencer (1-bar loop)
+## Sequencer
 
-A 16-step, one-bar sequencer is docked at the bottom:
+A multi-bar sequencer is docked at the bottom (drag its top edge to resize):
 
-- **BPM** field + **Play/Stop** loop with a moving playhead.
-- One lane per note (labeled with Johnston name + ratio, high pitch at top).
-- **Click a cell** to toggle a hit; cells are tinted by that note's live consonance.
-- **The tune-by-drag works here too**: right-click a lane (or cell) to set it as the
-  source, move vertically to lock a new pitch to a just interval from it, scroll to set
-  the prime limit, then click to drop the note at that step (it's added to the lattice too).
+- **BPM**, **bars** (1/2/4/8), zoom, **Play/Stop** with a smooth playhead
+  (Web-Audio-clock scheduling, exact rational event times).
+- **Lanes = every pitch class in the key signature × every octave** (C2–C6 region);
+  labels show Johnston name + octave, high at top.
+- **Click a lane, drag right** = add a note and set its length. **Right-click a bar** deletes it.
+- **Tune-by-drag works here too**: right-click a lane to set it as the source, move
+  vertically to lock a new pitch to a just interval from it, scroll to set the prime
+  limit, click to drop (it's added to the lattice and the key too).
+- **Score ⇄ Roll toggle**: read-only grand-staff view with Johnston accidentals.
+
+### Key signature (managing comma pumps)
+
+The **♪ column** in the notes table is the current key signature: only ♪-checked pitch
+classes get sequencer lanes. Comma-pump freely on the lattice — the grid stays at ~7
+notes. `key = selected` / `key = all` buttons re-key as the piece moves. Newly tuned
+notes join automatically (that's how you "add an accidental").
+
+### Rhythm map (rational time)
+
+Rhythm gets the same treatment as pitch. **𝅘𝅥𝅮 Rhythm** opens a lattice of divisions of
+the bar — the 2-axis explicit (2/1 … 1/64, every halving its own node), with **×3 ×5 ×7
+toggles** for triplet/quintuplet/septuplet space. Click divisions to enable them; note
+starts and lengths **snap to enabled divisions**, simpler divisions stickier, layered
+gridlines show each. Time is stored as exact fractions of the bar — 1/3, 3/20, wherever
+you land.
+
+## Commas, drones, and saving
+
+- **Comma links**: any two pitch classes within ~35¢ get a dashed amber link on the
+  lattice labeled with the exact comma (`81/80 · 21.5¢`). The drift you placed, named.
+- **Drones**: **shift-click** a lattice node or sequencer lane to hold it (Esc releases
+  all). Held notes stay salient, so the whole lattice recolours relative to the drone —
+  tune by ear against it. The voice is harmonic-rich on purpose: beats are audible.
+- **Autosave**: the whole project (notes, key, hits, rhythm map, tempo) persists in the
+  browser. **Export/Import .json** in the sidebar to keep or share pieces.
 
 ## The living map
 

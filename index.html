@@ -63,6 +63,9 @@
   .node.ref circle{stroke:var(--acc2);stroke-width:3}
   .node.active circle{stroke:#fff;stroke-width:2}
   .node.hub circle{stroke:#c79bff;stroke-width:3.5}
+  .node.drone circle{stroke:#5ee6d8;stroke-width:3.5}
+  .comma{stroke:#ffb35c;stroke-width:1.5;stroke-dasharray:5 4;opacity:.8}
+  .commalbl{fill:#ffb35c;font-size:10px;font-weight:600}
   .toolbar button.tgl{color:var(--acc2);border-color:#3a4154}
   .toolbar button.tgl.off{color:var(--dim);opacity:.6}
   .ribbon{stroke:#3a4154;stroke-width:1;stroke-dasharray:3 4}
@@ -176,6 +179,14 @@
     <button class="chip ghost" data-preset="harm7">7-limit (harmonic 7th)</button>
     <button class="chip ghost" data-preset="clear">clear</button>
   </div>
+
+  <h2>Project</h2>
+  <div class="row">
+    <button id="exportBtn" class="ghost">Export .json</button>
+    <button id="importBtn" class="ghost">Import</button>
+  </div>
+  <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+  <p class="hint">Autosaves to this browser as you work. Export to keep or share a piece.</p>
   <p class="hint"><b>Johnston:</b> ♯♭=25/24 · +/−=syntonic comma · 7/L=septimal · ↑/↓=11. <b>HD</b>=log₂(n·d), lower=more consonant. Lattice recolours around the notes you hold/play.</p>
 </div>
 
@@ -197,6 +208,7 @@
       <div class="lg-row"><span>consonant</span><span>dissonant</span></div>
       <div style="margin-top:6px">→ ×3 fifths · ↑ ×5 thirds · ⟋ ×7</div>
       <div><b>right-click</b> node = tune child · drag = pitch · scroll = limit</div>
+      <div><b>shift-click</b> = hold drone (Esc releases) · <span style="color:#ffb35c">┄ comma</span></div>
       <div>two-finger scroll = pan · pinch / ctrl+scroll = zoom</div>
     </div>
   </div>
@@ -447,6 +459,19 @@ function renderScene(){
   let edges='';
   notes.forEach(n=>{if(n.parent!=null){const a=pos[n.parent],b=pos[n.id];if(a&&b)
     edges+=`<line class="edge" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`;}});
+  // comma links: two pitch classes within ~35 cents are "the same note, a comma
+  // apart" — the drift you chose. Show the link and name the exact comma.
+  for(let i=0;i<notes.length;i++)for(let j=i+1;j<notes.length;j++){
+    const A=notes[i],B=notes[j];
+    const dc=cents(A.ratio)-cents(B.ratio);
+    const adc=Math.abs(dc);
+    if(adc<0.01||adc>=35)continue;
+    let cm=dc>0?div(A.ratio,B.ratio):div(B.ratio,A.ratio); // comma ratio >1
+    const a=pos[A.id],b=pos[B.id];
+    const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+    edges+=`<line class="comma" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>
+      <text class="commalbl" x="${mx}" y="${my-5}" text-anchor="middle">${cm.n}/${cm.d} · ${adc.toFixed(1)}¢</text>`;
+  }
   let nodes='';
   notes.forEach(n=>{const p=pos[n.id];
     nodes+=`<g class="node" data-id="${n.id}" transform="translate(${p.x},${p.y})">
@@ -459,7 +484,10 @@ function renderScene(){
   svg.querySelectorAll('.node').forEach(g=>{
     const id=+g.dataset.id;
     nodeEls[id]={g,circle:g.querySelector('circle'),label:g.querySelector('.nlabel'),sub:g.querySelector('.ncents')};
-    g.addEventListener('click',()=>{if(tune.on)return;toggleSel(id);playNote(notes.find(x=>x.id===id));});
+    g.addEventListener('click',e=>{if(tune.on)return;
+      const n=notes.find(x=>x.id===id);
+      if(e.shiftKey){toggleDrone(n,0);return;}
+      toggleSel(id);playNote(n);});
     g.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();startTune(id);});
   });
   paintNodes();
@@ -469,9 +497,11 @@ function renderScene(){
 function paintNodes(){
   const act=new Set(activeContext().filter(c=>c.w>0.6).map(c=>c.id));
   const hub=hubOn?impliedHub():null;
+  const dr=dronedIds();
   notes.forEach(n=>{const el=nodeEls[n.id];if(!el)return;
     let sal=n.salience||0;
     if(selected.has(n.id))sal=Math.max(sal,1.5);
+    if(dr.has(n.id))sal=Math.max(sal,1.6);
     if(hub&&hub.id===n.id)sal=Math.max(sal,0.95);
     const f=sal/(sal+1.1);
     const r=9+16*f, op=0.2+0.8*Math.min(1,sal/1.25);
@@ -479,7 +509,7 @@ function paintNodes(){
     el.circle.setAttribute('fill',consonanceColor(nodeHD(n)));
     el.g.setAttribute('opacity',op.toFixed(3));
     el.g.setAttribute('class','node'+(selected.has(n.id)?' sel':'')+(n.id===0?' ref':'')
-      +(act.has(n.id)?' active':'')+(hub&&hub.id===n.id?' hub':''));
+      +(act.has(n.id)?' active':'')+(hub&&hub.id===n.id?' hub':'')+(dr.has(n.id)?' drone':''));
     el.label.setAttribute('font-size',(9.5+3*f).toFixed(1));
   });
 }
@@ -586,16 +616,58 @@ function delNote(id){
 }
 
 //// ---- audio --------------------------------------------------------------
-let ac;
-function audio(){if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();
-  if(ac.state==='suspended')ac.resume();return ac;}
+let ac,master,voiceWave;
+function audio(){
+  if(!ac){
+    ac=new (window.AudioContext||window.webkitAudioContext)();
+    // gentle compressor so held chords/drones don't clip
+    const comp=ac.createDynamicsCompressor();
+    comp.threshold.value=-16;comp.ratio.value=4;
+    master=ac.createGain();master.gain.value=0.9;
+    master.connect(comp).connect(ac.destination);
+    // harmonic-rich voice (1/k^1.6 rolloff): JI beats and commas are audible,
+    // unlike a bare triangle where near-unisons hide
+    const N=12,re=new Float32Array(N+1),im=new Float32Array(N+1);
+    for(let k=1;k<=N;k++)im[k]=1/Math.pow(k,1.6);
+    voiceWave=ac.createPeriodicWave(re,im);
+  }
+  if(ac.state==='suspended')ac.resume();return ac;
+}
 function playFreq(hz,t0,dur,vol=0.22){
   const a=audio();const o=a.createOscillator(),g=a.createGain();
-  o.type='triangle';o.frequency.value=hz;
+  o.setPeriodicWave(voiceWave);o.frequency.value=hz;
   g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(vol,t0+0.012);
   g.gain.exponentialRampToValueAtTime(0.0008,t0+dur);
-  o.connect(g).connect(a.destination);o.start(t0);o.stop(t0+dur+0.05);
+  o.connect(g).connect(master);o.start(t0);o.stop(t0+dur+0.05);
 }
+//// drones: shift-click a note (lattice node or sequencer lane) to hold it.
+//// Held notes stay salient, so the whole lattice recolours relative to them.
+const drones=new Map(); // "id:oct" -> {o,g}
+function toggleDrone(n,oct=0){
+  const a=audio(),key=n.id+':'+oct;
+  if(drones.has(key)){
+    const d=drones.get(key);
+    d.g.gain.setTargetAtTime(0,a.currentTime,0.08);
+    setTimeout(()=>{try{d.o.stop();}catch(e){}},500);
+    drones.delete(key);
+  }else{
+    const o=a.createOscillator(),g=a.createGain();
+    o.setPeriodicWave(voiceWave);o.frequency.value=laneFreq(n,oct);
+    g.gain.value=0;g.gain.setTargetAtTime(0.13,a.currentTime,0.06);
+    o.connect(g).connect(master);o.start();
+    drones.set(key,{o,g});
+    const hz=laneFreq(n,oct);midiPlay(hz,1.5);
+    bump(n);
+  }
+  paintNodes();
+}
+function stopAllDrones(){
+  [...drones.keys()].forEach(k=>{
+    const id=+k.split(':')[0],oct=+k.split(':')[1];
+    const n=notes.find(x=>x.id===id);if(n)toggleDrone(n,oct);
+  });
+}
+function dronedIds(){const s=new Set();drones.forEach((v,k)=>s.add(+k.split(':')[0]));return s;}
 function playNote(n){if(!n)return;bump(n);const hz=noteFreq(n.ratio);playFreq(hz,audio().currentTime,0.6);midiPlay(hz,0.6);}
 function playChord(list){const t=audio().currentTime;list.forEach(n=>{bump(n);const hz=noteFreq(n.ratio);playFreq(hz,t,1.2);midiPlay(hz,1.2);});}
 
@@ -836,7 +908,7 @@ function renderSeq(){
     });
     l.addEventListener('contextmenu',e=>{
       if(e.target!==l)return;
-      e.preventDefault();startPlace(+l.dataset.id,+l.dataset.oct);
+      e.preventDefault();e.stopPropagation();startPlace(+l.dataset.id,+l.dataset.oct);
     });
   });
   grid.querySelectorAll('.noteBar').forEach(b=>{
@@ -854,7 +926,9 @@ function renderSeq(){
   grid.querySelectorAll('.lanelbl').forEach(l=>{
     l.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();startPlace(+l.dataset.id,+l.dataset.oct);});
     l.addEventListener('mousedown',e=>e.stopPropagation());
-    l.addEventListener('click',()=>{const n=notes.find(x=>x.id===+l.dataset.id);toggleSel(n.id);playLane(n,+l.dataset.oct);});
+    l.addEventListener('click',e=>{const n=notes.find(x=>x.id===+l.dataset.id);
+      if(e.shiftKey){toggleDrone(n,+l.dataset.oct);return;}
+      toggleSel(n.id);playLane(n,+l.dataset.oct);});
   });
   if(seqAutoScroll){
     const i=rows.findIndex(r=>r.oct===0);
@@ -862,6 +936,7 @@ function renderSeq(){
     seqAutoScroll=false;
   }
   drawPlaceGhost();drawPlayhead();
+  scheduleSave();
 }
 
 //// score view (Ben Johnston staff notation, read-only)
@@ -972,6 +1047,7 @@ function seqStart(){
   seq.loopBars=BARS;
   seq.t0=a.currentTime+0.08;
   seq.events=hits.map(h=>({id:h.id,oct:h.oct,sb:frv(h.start),lb:frv(h.len)}))
+    .filter(e=>e.sb<seq.loopBars)      // hits beyond the loop (from a longer bar count) wait
     .sort((x,y)=>x.sb-y.sb);
   seq.evIdx=0;seq.loopK=0;
   document.getElementById('seqPlay').textContent='■ Stop';
@@ -1015,6 +1091,56 @@ function seqFrame(){
     b.classList.toggle('play',seq.posBars>=s&&seq.posBars<s+l);
   });
 }
+
+//// ---- project save/load ----------------------------------------------------
+const STORE_KEY='lattice-project-v1';
+function serialize(){
+  return {v:1,
+    root:rootName(),freq:rootFreq(),
+    bpm:document.getElementById('bpm').value,bars:BARS,
+    notes:notes.map(n=>({id:n.id,n:n.ratio.n,d:n.ratio.d,parent:n.parent,gamut:n.gamut!==false})),
+    nextId,
+    hits:hits.map(h=>({id:h.id,oct:h.oct,sn:h.start.n,sd:h.start.d,ln:h.len.n,ld:h.len.d,div:h.div})),
+    rdivs:[...rhythmDivs],rprimes:rhythmPrimes};
+}
+function deserialize(st){
+  if(!st||st.v!==1||!Array.isArray(st.notes)||!st.notes.length)return false;
+  document.getElementById('rootName').value=st.root||'C';
+  document.getElementById('rootFreq').value=st.freq||261.63;
+  document.getElementById('bpm').value=st.bpm||100;
+  BARS=st.bars||1;document.getElementById('seqBars').value=BARS;
+  notes=st.notes.map(o=>({id:o.id,ratio:fr(o.n,o.d),parent:o.parent,interval:fr(1,1),
+    name:'',salience:0.4,gamut:o.gamut!==false}));
+  nextId=st.nextId||Math.max(0,...notes.map(n=>n.id))+1;
+  hits=(st.hits||[]).map(o=>({id:o.id,oct:o.oct,start:fr(o.sn,o.sd),len:fr(o.ln,o.ld),div:o.div}));
+  if(Array.isArray(st.rdivs)&&st.rdivs.length)rhythmDivs=new Set(st.rdivs);
+  if(st.rprimes)rhythmPrimes=st.rprimes;
+  selected.clear();seqAutoScroll=true;
+  return true;
+}
+let saveT=null;
+function scheduleSave(){clearTimeout(saveT);saveT=setTimeout(()=>{
+  try{localStorage.setItem(STORE_KEY,JSON.stringify(serialize()));}catch(e){}
+},400);}
+function loadStored(){
+  try{return deserialize(JSON.parse(localStorage.getItem(STORE_KEY)));}
+  catch(e){return false;}
+}
+document.getElementById('exportBtn').onclick=()=>{
+  const blob=new Blob([JSON.stringify(serialize(),null,1)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download='lattice-piece.json';a.click();
+  URL.revokeObjectURL(a.href);
+};
+document.getElementById('importBtn').onclick=()=>document.getElementById('importFile').click();
+document.getElementById('importFile').addEventListener('change',e=>{
+  const f=e.target.files[0];if(!f)return;
+  f.text().then(t=>{
+    try{if(deserialize(JSON.parse(t))){render();fitView();}else alert('Not a Lattice project file.');}
+    catch(err){alert('Could not read that file.');}
+  });
+  e.target.value='';
+});
 
 //// ---- presets ------------------------------------------------------------
 const PRESETS={
@@ -1098,7 +1224,7 @@ window.addEventListener('mouseup',()=>{
   if(!seqDrag){return;}
   seqDrag=null;renderSeq();
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(tune.on)endTune(false);if(place.on)cancelPlace();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(tune.on)endTune(false);if(place.on)cancelPlace();stopAllDrones();}});
 
 // lattice pan/zoom/tune
 let drag=null;
@@ -1146,7 +1272,11 @@ let lastT=performance.now();
 function animate(){
   const t=performance.now(),dt=Math.min(0.08,(t-lastT)/1000);lastT=t;
   const dec=Math.exp(-dt/TAU);
-  notes.forEach(n=>{n.salience=Math.max(SAL_FLOOR,(n.salience||0)*dec);});
+  const dr=dronedIds();
+  notes.forEach(n=>{
+    n.salience=Math.max(SAL_FLOOR,(n.salience||0)*dec);
+    if(dr.has(n.id))n.salience=Math.max(n.salience,1.2); // held notes stay in context
+  });
   if(nodeEls&&Object.keys(nodeEls).length)paintNodes();
   if(tune.on)renderTuningOverlay();
   seqFrame();
@@ -1164,7 +1294,8 @@ window.__t={genCandidates,intervalHD,consonanceColor,johnston,fr,mul,cents,snapP
   get notes(){return notes;},get hits(){return hits;},get place(){return place;},bump,paintNodes,timeSnap};
 
 //// ---- go -----------------------------------------------------------------
-loadPreset('major7');
+if(loadStored()){render();fitView();}
+else loadPreset('major7');
 requestAnimationFrame(animate);
 </script>
 </body>
