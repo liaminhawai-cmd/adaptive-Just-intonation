@@ -89,20 +89,28 @@
   .seqbanner{color:var(--acc2);font-size:12px;margin-left:auto}
   .seqlegend{margin-left:auto;opacity:.75}
   .seqgrid{flex:1;overflow:auto;position:relative}
-  .lane{display:grid;grid-auto-rows:24px;height:24px;border-bottom:1px solid #20242f}
-  .lane>*{grid-row:1}
+  .lane{position:relative;height:24px;border-bottom:1px solid #20242f}
   .lane.src{background:#241f12}
-  .lanelbl{display:flex;align-items:center;gap:6px;padding:0 8px;font-size:12px;
+  .lanelbl{position:sticky;left:0;display:inline-flex;align-items:center;gap:6px;padding:0 8px;font-size:12px;
+       width:118px;height:100%;background:var(--panel);z-index:3;
        border-right:1px solid var(--line);cursor:context-menu;white-space:nowrap;overflow:hidden}
+  .gridbg{position:absolute;top:0;pointer-events:none;z-index:0}
   .lanelbl .jn{font-weight:700}
   .lanelbl .rt{color:var(--dim);font-size:11px}
-  .cell{border-right:1px solid #191c24;cursor:pointer}
-  .cell:nth-child(4n+2){border-left:1px solid #2c3140}
-  .cell.on{box-shadow:inset 0 0 0 2px #0a0c12}
-  .cell.play{background:#2a3450 !important}
-  .noteBar{grid-row:1;height:20px;margin:2px 0;border-radius:4px;cursor:ew-resize;opacity:.85;display:flex;align-items:center;padding:0 6px;font-size:10px;color:#0a0c12;white-space:nowrap;overflow:hidden}
+  .noteBar{position:absolute;top:2px;height:20px;border-radius:4px;cursor:ew-resize;opacity:.85;z-index:2}
   .noteBar.play{opacity:1;box-shadow:0 0 8px rgba(255,212,121,.5)}
   .noteBar.dragging{opacity:1;box-shadow:inset 0 0 0 2px #fff}
+  /* rhythm map */
+  .rpanel{position:absolute;right:10px;bottom:100%;margin-bottom:8px;background:rgba(20,22,28,.97);
+       border:1px solid var(--line);border-radius:10px;z-index:9;padding:10px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  .rphead{font-size:12px;color:var(--dim);margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  .rphead .chip{padding:3px 8px;font-size:12px}
+  .rphead .chip.on{color:var(--acc2);border-color:var(--acc2)}
+  .rnode{cursor:pointer}
+  .rnode circle{fill:var(--panel2);stroke:var(--line);stroke-width:1.5}
+  .rnode.on circle{fill:var(--acc2);stroke:#0a0c12}
+  .rnode text{font-size:10px;fill:var(--txt);text-anchor:middle;pointer-events:none}
+  .rnode.on text{fill:#0a0c12;font-weight:700}
   .octn{color:var(--dim);font-weight:400;font-size:10px;margin-left:1px}
   .lane.rootoct .lanelbl{border-left:2px solid #3a4154}
   .x.gm.on{color:var(--acc2)}
@@ -195,15 +203,20 @@
 
   <div id="seq">
     <div class="seqgrip" id="seqGrip" title="drag to resize"></div>
+    <div class="rpanel" id="rpanel" style="display:none">
+      <div class="rphead">rhythm map — click divisions of the bar to enable snapping · <span id="rprimes"></span></div>
+      <svg id="rsvg" width="470" height="360"></svg>
+    </div>
     <div class="seqhead">
       <button id="seqPlay" class="primary">▶ Play</button>
       <button id="seqViewBtn" class="ghost" title="Toggle piano-roll / Ben Johnston staff notation">𝄞 Score</button>
+      <button id="rhythmBtn" class="ghost" title="Rhythm map: choose the divisions notes snap to">𝅘𝅥𝅮 Rhythm</button>
       <span class="t">BPM</span><input id="bpm" type="number" value="100" min="20" max="300" step="1"/>
       <span class="t">bars</span><select id="seqBars"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select>
       <button id="seqZin" class="ghost" style="width:auto;padding:6px 8px" title="Zoom in">+</button>
       <button id="seqZout" class="ghost" style="width:auto;padding:6px 8px" title="Zoom out">−</button>
       <button id="seqClear" class="ghost">clear</button>
-      <span class="t seqlegend">✏️ click-drag = note + length · right-click bar = delete · right-click lane = tune new pitch from it</span>
+      <span class="t seqlegend">✏️ click-drag = note + length (snaps to rhythm map) · right-click bar = delete · right-click lane = tune new pitch</span>
       <span class="seqbanner" id="seqBanner"></span>
     </div>
     <div class="seqgrid" id="seqgrid"></div>
@@ -280,7 +293,7 @@ const NOW=()=>performance.now();
 function rootFreq(){return parseFloat(document.getElementById('rootFreq').value)||261.63;}
 function rootName(){return document.getElementById('rootName').value||'C';}
 const SAL_FLOOR=0.28, SAL_MAX=3;   // salience never fully dies; caps at SAL_MAX
-function addRoot(){notes=[{id:0,ratio:fr(1,1),parent:null,interval:fr(1,1),name:rootName(),salience:0.8}];nextId=1;selected.clear();seqHits.clear();}
+function addRoot(){notes=[{id:0,ratio:fr(1,1),parent:null,interval:fr(1,1),name:rootName(),salience:0.8}];nextId=1;selected.clear();hits=[];}
 function noteFreq(f){return rootFreq()*f.n/f.d;}
 function nameOf(n){return n.id===0?rootName():johnston(n.ratio);}
 function bump(n){if(n)n.salience=Math.min(SAL_MAX,(n.salience||0)+1);}
@@ -568,7 +581,7 @@ function toggleSel(id){if(selected.has(id))selected.delete(id);else selected.add
 function delNote(id){
   notes.filter(n=>n.parent===id).forEach(n=>{n.parent=0;});
   notes=notes.filter(n=>n.id!==id);selected.delete(id);
-  [...seqHits.keys()].forEach(k=>{if(k.startsWith(id+':'))seqHits.delete(k);});
+  hits=hits.filter(h=>h.id!==id);
   render();
 }
 
@@ -649,16 +662,102 @@ document.getElementById('midiOut').addEventListener('change',e=>{
 document.getElementById('midiMode').addEventListener('change',e=>{midiMode=e.target.value;});
 
 //// ---- sequencer ----------------------------------------------------------
-let STEPS=16;
-let seqZoom=1;  // cell width multiplier
+let BARS=1;
+let seqZoom=1;  // bar width multiplier
 let seqView='roll';              // 'roll' | 'score'
 let seqAutoScroll=true;          // scroll middle octave into view on next roll render
-let seqHits=new Map();           // "noteId:oct:step" -> length (in steps)
-let seqDrag=null;                // {noteId, oct, startStep, currentLength}
-let seq={playing:false,timer:null,cur:-1};
-let place={on:false,src:null,srcOct:0,level:2,cands:[],cur:null,step:0,acc:0};
+let hits=[];                     // {id, oct, start:frac(bars), len:frac(bars), div:'n/d'}
+let seqDrag=null;                // {hit, div} — live length drag (hit edited in place)
+let seq={playing:false,timer:null,t0:0,barSec:2.4,loopBars:1,events:[],evIdx:0,loopK:0,posBars:-1};
+let place={on:false,src:null,srcOct:0,level:2,cands:[],cur:null,start:null,startDiv:null,acc:0};
 const grid=document.getElementById('seqgrid');
 const seqBanner=document.getElementById('seqBanner');
+const barW=()=>288*seqZoom;      // px per bar
+
+//// rhythm map: divisions of the bar as exact fractions. The 2-axis is explicit
+//// (every octave of a duration is its own node); 3/5/7 axes are toggleable.
+let rhythmPrimes={3:true,5:false,7:false};
+let rhythmDivs=new Set(['1/4','1/8','1/16']);   // enabled snap divisions (of one bar)
+function rhythmNodeList(){
+  const out=[];
+  const e3s=rhythmPrimes[3]?[-2,-1,0,1]:[0];
+  const e5s=rhythmPrimes[5]?[-1,0,1]:[0];
+  const e7s=rhythmPrimes[7]?[-1,0,1]:[0];
+  for(let e2=-6;e2<=1;e2++)for(const e3 of e3s)for(const e5 of e5s)for(const e7 of e7s){
+    let n=1,d=1;
+    const put=(p,e)=>{if(e>0)n*=Math.pow(p,e);else d*=Math.pow(p,-e);};
+    put(2,e2);put(3,e3);put(5,e5);put(7,e7);
+    const v=n/d;
+    if(v>2.001||v<1/64-1e-9)continue;
+    const f=fr(n,d);
+    out.push({f,v,e3,e5,e7,key:f.n+'/'+f.d});
+  }
+  return out;
+}
+function divList(){return [...rhythmDivs].map(s=>parseRatio(s)).filter(Boolean);}
+// snap a time (in bars, float) to the nearest multiple of an enabled division;
+// simpler divisions get a wider capture zone, like the pitch snapping.
+function timeSnap(xBars){
+  let best=null,bs=1e9;
+  divList().forEach(dv=>{
+    const step=dv.n/dv.d;
+    let k=Math.round(xBars/step);
+    if(k<0)k=0;
+    if(k*step>BARS-step*0.5)k=Math.max(0,Math.floor((BARS-1e-9)/step)-0);
+    if(k*step>=BARS)k=Math.max(0,k-1);
+    const hd=Math.abs(log2(dv.n*dv.d));
+    const score=Math.abs(xBars-k*step)*barW()-4*Math.max(0,5-hd);
+    if(score<bs){bs=score;best={div:dv,start:fr(k*dv.n,dv.d),xBars:k*step};}
+  });
+  return best;
+}
+function gridBg(){
+  const bw=barW();
+  const layers=[`repeating-linear-gradient(90deg,#3a4154 0 2px,transparent 2px ${bw}px)`];
+  divList().sort((a,b)=>(b.n/b.d)-(a.n/a.d)).forEach(dv=>{
+    const w=(dv.n/dv.d)*bw;
+    if(w<4)return;
+    const hd=Math.abs(log2(dv.n*dv.d));
+    const a=Math.max(.06,.3-.045*hd);
+    layers.push(`repeating-linear-gradient(90deg,rgba(122,140,190,${a.toFixed(2)}) 0 1px,transparent 1px ${w.toFixed(2)}px)`);
+  });
+  return layers.join(',');
+}
+function renderRhythm(){
+  const pr=document.getElementById('rprimes');
+  pr.innerHTML='';
+  [3,5,7].forEach(p=>{
+    const b=document.createElement('button');
+    b.className='chip ghost'+(rhythmPrimes[p]?' on':'');b.textContent='×'+p;
+    b.onclick=()=>{
+      rhythmPrimes[p]=!rhythmPrimes[p];
+      if(!rhythmPrimes[p]){ // drop enabled divisions that use this prime
+        [...rhythmDivs].forEach(k=>{const f=parseRatio(k),e=exps(f);if(e[p])rhythmDivs.delete(k);});
+        if(!rhythmDivs.size)rhythmDivs.add('1/16');
+      }
+      renderRhythm();renderSeq();
+    };
+    pr.appendChild(b);
+  });
+  const svg=document.getElementById('rsvg');
+  let s='';
+  rhythmNodeList().forEach(nd=>{
+    const x=235+nd.e3*85+nd.e5*42+nd.e7*21;
+    const y=295+log2(nd.v)*44;
+    const on=rhythmDivs.has(nd.key);
+    s+=`<g class="rnode${on?' on':''}" data-key="${nd.key}" transform="translate(${x},${y})">
+      <circle r="15"/><text y="3.5">${nd.key}</text></g>`;
+  });
+  svg.innerHTML=s;
+  svg.querySelectorAll('.rnode').forEach(g=>{
+    g.addEventListener('click',()=>{
+      const k=g.dataset.key;
+      if(rhythmDivs.has(k)){if(rhythmDivs.size>1)rhythmDivs.delete(k);}
+      else rhythmDivs.add(k);
+      renderRhythm();renderSeq();
+    });
+  });
+}
 
 // lanes = every gamut pitch class in every octave, high at top.
 // oct 0 = the root octave (root freq itself); range C2..B6-ish around it.
@@ -698,61 +797,63 @@ function playLane(n,oct,dur=0.5){
   bump(n);const hz=laneFreq(n,oct);
   playFreq(hz,audio().currentTime,dur);midiPlay(hz,dur);
 }
+const frv=f=>f.n/f.d;
 function renderSeq(){
   if(seqView==='score'){renderScore();drawPlayhead();return;}
   const rows=laneRows();
-  const cellW=18*seqZoom;
-  const gridCols=`118px repeat(${STEPS},${cellW}px)`;
-  let html='';
+  const bw=barW(),contentW=118+BARS*bw;
+  let html=`<div class="gridbg" style="left:118px;width:${BARS*bw}px;height:${rows.length*LANE_H}px;background-image:${gridBg()}"></div>`;
   rows.forEach(({n,oct})=>{
     const isSrc=place.on&&place.src&&place.src.id===n.id&&place.srcOct===oct;
     const octLbl=4+oct; // root octave displayed as 4 (C4 ≈ middle C)
-    html+=`<div class="lane${isSrc?' src':''}${oct===0?' rootoct':''}" data-id="${n.id}" data-oct="${oct}" style="grid-template-columns:${gridCols}">
+    html+=`<div class="lane${isSrc?' src':''}${oct===0?' rootoct':''}" data-id="${n.id}" data-oct="${oct}" style="width:${contentW}px">
       <div class="lanelbl" data-id="${n.id}" data-oct="${oct}"><span class="jn">${nameOf(n)}<span class="octn">${octLbl}</span></span><span class="rt">${n.ratio.n}/${n.ratio.d}</span></div>`;
-    const covered=new Set();
-    for(let s=0;s<STEPS;s++){
-      if(covered.has(s))continue;
-      const key=n.id+':'+oct+':'+s;
-      // live drag preview overrides the stored length for the note being dragged
-      let len=seqHits.get(key)||0;
-      if(seqDrag&&seqDrag.noteId===n.id&&seqDrag.oct===oct&&seqDrag.startStep===s)len=seqDrag.currentLength;
-      const playing=seq.cur>=s&&seq.cur<s+len;
-      if(len>0){
-        covered.add(s);
-        for(let i=1;i<len;i++)if(s+i<STEPS)covered.add(s+i);
-        const dragging=seqDrag&&seqDrag.noteId===n.id&&seqDrag.oct===oct&&seqDrag.startStep===s;
-        html+=`<div class="noteBar${playing?' play':''}${dragging?' dragging':''}" data-id="${n.id}" data-oct="${oct}" data-step="${s}" data-len="${len}"
-          style="grid-column:${2+s}/${2+s+len};background:${consonanceColor(nodeHD(n))}"></div>`;
-      }else{
-        html+=`<div class="cell" data-id="${n.id}" data-oct="${oct}" data-step="${s}" style="grid-column:${2+s}"></div>`;
-      }
-    }
+    hits.forEach((h,i)=>{
+      if(h.id!==n.id||h.oct!==oct)return;
+      const x=118+frv(h.start)*bw,w=Math.max(4,frv(h.len)*bw-2);
+      const dragging=seqDrag&&seqDrag.hit===h;
+      html+=`<div class="noteBar${dragging?' dragging':''}" data-i="${i}" data-sb="${frv(h.start)}" data-lb="${frv(h.len)}"
+        style="left:${x}px;width:${w}px;background:${consonanceColor(nodeHD(n))}" title="${h.start.n}/${h.start.d} bar · length ${h.len.n}/${h.len.d}"></div>`;
+    });
     html+=`</div>`;
   });
   grid.innerHTML=html;
-  // wire cells and note bars
-  grid.querySelectorAll('.cell').forEach(c=>{
-    c.addEventListener('mousedown',e=>{
+  // wire lanes (mousedown on empty area = add note at snapped time) and bars
+  grid.querySelectorAll('.lane').forEach(l=>{
+    l.addEventListener('mousedown',e=>{
+      if(e.target!==l)return;                    // bars/labels handle their own
       if(place.on){commitPlace();return;}
       e.preventDefault();
-      const id=+c.dataset.id,oct=+c.dataset.oct,s=+c.dataset.step;
-      seqDrag={noteId:id,oct,startStep:s,currentLength:1};
+      const id=+l.dataset.id,oct=+l.dataset.oct;
+      const r=grid.getBoundingClientRect();
+      const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
+      const ts=timeSnap(xBars);if(!ts)return;
+      const h={id,oct,start:ts.start,len:fr(ts.div.n,ts.div.d),div:ts.div.n+'/'+ts.div.d};
+      hits.push(h);
+      seqDrag={hit:h,div:ts.div};
       playLane(notes.find(n=>n.id===id),oct);
       renderSeq();
     });
-    c.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+c.dataset.id,+c.dataset.oct);});
+    l.addEventListener('contextmenu',e=>{
+      if(e.target!==l)return;
+      e.preventDefault();startPlace(+l.dataset.id,+l.dataset.oct);
+    });
   });
   grid.querySelectorAll('.noteBar').forEach(b=>{
     b.addEventListener('mousedown',e=>{
       if(place.on){commitPlace();return;}
-      e.preventDefault();
-      seqDrag={noteId:+b.dataset.id,oct:+b.dataset.oct,startStep:+b.dataset.step,currentLength:+b.dataset.len};
+      e.preventDefault();e.stopPropagation();
+      const h=hits[+b.dataset.i];if(!h)return;
+      seqDrag={hit:h,div:parseRatio(h.div)||divList()[0]};
     });
-    b.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();
-      seqHits.delete(b.dataset.id+':'+b.dataset.oct+':'+b.dataset.step);renderSeq();});
+    b.addEventListener('contextmenu',e=>{
+      e.preventDefault();e.stopPropagation();
+      hits.splice(+b.dataset.i,1);renderSeq();
+    });
   });
   grid.querySelectorAll('.lanelbl').forEach(l=>{
-    l.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+l.dataset.id,+l.dataset.oct);});
+    l.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();startPlace(+l.dataset.id,+l.dataset.oct);});
+    l.addEventListener('mousedown',e=>e.stopPropagation());
     l.addEventListener('click',()=>{const n=notes.find(x=>x.id===+l.dataset.id);toggleSel(n.id);playLane(n,+l.dataset.oct);});
   });
   if(seqAutoScroll){
@@ -766,35 +867,34 @@ function renderSeq(){
 //// score view (Ben Johnston staff notation, read-only)
 const LETTER_IDX={C:0,D:1,E:2,F:3,G:4,A:5,B:6};
 function renderScore(){
-  const cellW=18*seqZoom;
-  const W=118+STEPS*cellW+20, hs=5, yOf=d=>25+(48-d)*hs, H=yOf(14)+25;
+  const bw=barW();
+  const W=118+BARS*bw+20, hs=5, yOf=d=>25+(48-d)*hs, H=yOf(14)+25;
   let s='';
   // staff lines: treble E4..F5 (d 30..38), bass G2..A3 (d 18..26)
   [30,32,34,36,38,18,20,22,24,26].forEach(d=>
     s+=`<line x1="118" y1="${yOf(d)}" x2="${W-10}" y2="${yOf(d)}" stroke="#3a4154"/>`);
-  // bar lines each 16 steps
-  for(let b=0;b<=STEPS;b+=16){const x=118+b*cellW;
+  // bar lines
+  for(let b=0;b<=BARS;b++){const x=118+b*bw;
     s+=`<line x1="${x}" y1="${yOf(38)}" x2="${x}" y2="${yOf(18)}" stroke="#2a2e3a"/>`;}
   // clefs (unicode; falls back harmlessly if the glyph is missing)
   s+=`<text x="96" y="${yOf(32)+9}" font-size="30" fill="#969bab">𝄞</text>`;
   s+=`<text x="96" y="${yOf(24)+7}" font-size="26" fill="#969bab">𝄢</text>`;
   s+=`<text x="8" y="30" font-size="11" fill="#969bab">score view</text>`;
   s+=`<text x="8" y="44" font-size="10" fill="#5a5f6e">(read-only — edit in Roll)</text>`;
-  seqHits.forEach((len,k)=>{
-    const parts=k.split(':');
-    const id=+parts[0],oct=+parts[1],st=+parts[2];
-    const n=notes.find(x=>x.id===id);if(!n)return;
+  hits.forEach(h=>{
+    const n=notes.find(x=>x.id===h.id);if(!n)return;
     const name=nameOf(n),m=name.match(/^([A-G])(.*)$/);
     let d,acc;
-    if(m){d=(4+oct)*7+LETTER_IDX[m[1]];acc=m[2];}
-    else{const tc=cents(n.ratio)+1200*oct;d=28+Math.round(7*tc/1200);acc=name;} // >13-limit fallback
-    const x=118+st*cellW+8,y=yOf(d);
+    if(m){d=(4+h.oct)*7+LETTER_IDX[m[1]];acc=m[2];}
+    else{const tc=cents(n.ratio)+1200*h.oct;d=28+Math.round(7*tc/1200);acc=name;} // >13-limit fallback
+    const x=118+frv(h.start)*bw+8,y=yOf(d);
     // ledger lines
     for(let L=40;L<=d;L+=2)s+=`<line x1="${x-9}" y1="${yOf(L)}" x2="${x+9}" y2="${yOf(L)}" stroke="#3a4154"/>`;
     for(let L=16;L>=d;L-=2)s+=`<line x1="${x-9}" y1="${yOf(L)}" x2="${x+9}" y2="${yOf(L)}" stroke="#3a4154"/>`;
     if(d===27||d===28)s+=`<line x1="${x-9}" y1="${yOf(28)}" x2="${x+9}" y2="${yOf(28)}" stroke="#3a4154"/>`;
     const col=consonanceColor(nodeHD(n));
-    if(len>1)s+=`<line x1="${x+7}" y1="${y}" x2="${118+(st+len)*cellW-4}" y2="${y}" stroke="${col}" stroke-width="2" opacity=".55"/>`;
+    const endX=118+(frv(h.start)+frv(h.len))*bw-4;
+    if(endX>x+9)s+=`<line x1="${x+7}" y1="${y}" x2="${endX}" y2="${y}" stroke="${col}" stroke-width="2" opacity=".55"/>`;
     s+=`<ellipse cx="${x}" cy="${y}" rx="6" ry="4.2" fill="${col}" stroke="#0a0c12"/>`;
     if(acc)s+=`<text x="${x-8}" y="${y+3.5}" text-anchor="end" font-size="10" fill="#e7e9ef">${acc}</text>`;
   });
@@ -802,10 +902,9 @@ function renderScore(){
 }
 function drawPlayhead(){
   let ph=grid.querySelector('.ph');
-  if(seq.cur<0){if(ph)ph.remove();return;}
+  if(seq.posBars<0){if(ph)ph.remove();return;}
   if(!ph){ph=document.createElement('div');ph.className='ph';grid.appendChild(ph);}
-  const cellW=18*seqZoom;
-  ph.style.left=(118+seq.cur*cellW)+'px';
+  ph.style.left=(118+seq.posBars*barW())+'px';
   // cover the full scrollable content, not just the viewport
   const h=seqView==='score'?(grid.firstChild?grid.firstChild.getAttribute('height'):0):laneRows().length*LANE_H;
   ph.style.bottom='auto';ph.style.height=h+'px';
@@ -826,8 +925,9 @@ function updatePlace(clientX,clientY){
   const targetAbs=yToCents(y,rows);
   const targetRel=targetAbs-srcAbsCents();     // interval cents from source lane
   place.cur=snapPick(place.cands,targetRel);
-  const cellW=18*seqZoom;
-  place.step=Math.min(STEPS-1,Math.max(0,Math.floor((clientX-r.left-118+grid.scrollLeft)/cellW)));
+  const xBars=(clientX-r.left+grid.scrollLeft-118)/barW();
+  const ts=timeSnap(xBars);
+  if(ts){place.start=ts.start;place.startDiv=ts.div;}
   drawPlaceGhost();
 }
 function drawPlaceGhost(){
@@ -842,17 +942,19 @@ function drawPlaceGhost(){
   const gf=mul(srcAbsRatio,place.cur.ratio);
   const pc=octReduce(gf);
   const lbl=document.createElement('div');lbl.className='ghostlbl';lbl.style.top=y+'px';lbl.style.left='124px';
-  lbl.textContent=`${johnston(pc)}  ${place.cur.ratio.n}/${place.cur.ratio.d} from source  ·  step ${place.step+1}`;
+  const at=place.start?` · at ${place.start.n}/${place.start.d} bar`:'';
+  lbl.textContent=`${johnston(pc)}  ${place.cur.ratio.n}/${place.cur.ratio.d} from source${at}`;
   grid.appendChild(line);grid.appendChild(lbl);
 }
 function commitPlace(){
-  if(place.cur){
+  if(place.cur&&place.start){
     const note=addNote(place.src.id,place.cur.ratio);   // adds/reuses the pitch class
     if(note){
       const abs=srcAbsCents()+place.cur.cents;
       let oct=Math.round((abs-cents(note.ratio))/1200);
       oct=Math.max(OCTS[OCTS.length-1],Math.min(OCTS[0],oct));
-      seqHits.set(note.id+':'+oct+':'+place.step,1);
+      const dv=place.startDiv||divList()[0];
+      hits.push({id:note.id,oct,start:place.start,len:fr(dv.n,dv.d),div:dv.n+'/'+dv.d});
       playLane(note,oct);
     }
   }
@@ -860,37 +962,58 @@ function commitPlace(){
 }
 function cancelPlace(){place.on=false;seqBanner.textContent='';render();}
 
-//// transport
-function stepMs(){const bpm=parseFloat(document.getElementById('bpm').value)||100;return (60000/bpm)/4;}
+//// transport — Web-Audio-clock lookahead scheduler over exact-fraction times
 function seqStart(){
-  if(seq.playing)return;seq.playing=true;seq.cur=-1;audio();
+  if(seq.playing)return;
+  const a=audio();
+  const bpm=parseFloat(document.getElementById('bpm').value)||100;
+  seq.playing=true;
+  seq.barSec=240/bpm;                 // 4 beats per bar
+  seq.loopBars=BARS;
+  seq.t0=a.currentTime+0.08;
+  seq.events=hits.map(h=>({id:h.id,oct:h.oct,sb:frv(h.start),lb:frv(h.len)}))
+    .sort((x,y)=>x.sb-y.sb);
+  seq.evIdx=0;seq.loopK=0;
   document.getElementById('seqPlay').textContent='■ Stop';
-  const tick=()=>{
-    seq.cur=(seq.cur+1)%STEPS;
-    const t=audio().currentTime;
-    seqHits.forEach((len,k)=>{
-      const parts=k.split(':');
-      if(+parts[2]!==seq.cur)return;
-      const n=notes.find(x=>x.id===+parts[0]);if(!n)return;
-      bump(n);
-      const hz=laneFreq(n,+parts[1]),dur=Math.min(2.5,len*stepMs()/1000);
-      playFreq(hz,t,dur,0.2);midiPlay(hz,dur);
-    });
-    updatePlayCells();
-    seq.timer=setTimeout(tick,stepMs());
-  };
-  tick();
+  seq.timer=setInterval(seqSchedule,25);
+  seqSchedule();
 }
-function seqStop(){seq.playing=false;clearTimeout(seq.timer);seq.cur=-1;
-  document.getElementById('seqPlay').textContent='▶ Play';updatePlayCells();drawPlayhead();}
-function updatePlayCells(){
-  grid.querySelectorAll('.cell.play').forEach(c=>c.classList.remove('play'));
-  if(seq.cur>=0)grid.querySelectorAll(`.cell[data-step="${seq.cur}"]`).forEach(c=>c.classList.add('play'));
-  grid.querySelectorAll('.noteBar').forEach(b=>{
-    const s=+b.dataset.step,l=+b.dataset.len;
-    b.classList.toggle('play',seq.cur>=s&&seq.cur<s+l);
-  });
+function seqSchedule(){
+  const a=audio(),horizon=a.currentTime+0.15;
+  const evs=seq.events;
+  if(!evs.length)return;
+  let guard=0;
+  while(guard++<500){
+    const ev=evs[seq.evIdx];
+    const t=seq.t0+(seq.loopK*seq.loopBars+ev.sb)*seq.barSec;
+    if(t>horizon)break;
+    const n=notes.find(x=>x.id===ev.id);
+    if(n){
+      const hz=laneFreq(n,ev.oct),dur=Math.max(0.06,ev.lb*seq.barSec);
+      playFreq(hz,Math.max(t,a.currentTime),dur,0.2);
+      const dly=Math.max(0,(t-a.currentTime)*1000);
+      setTimeout(()=>{if(seq.playing){bump(n);midiPlay(hz,dur);}},dly);
+    }
+    seq.evIdx++;
+    if(seq.evIdx>=evs.length){seq.evIdx=0;seq.loopK++;}
+  }
+}
+function seqStop(){
+  seq.playing=false;clearInterval(seq.timer);seq.posBars=-1;
+  document.getElementById('seqPlay').textContent='▶ Play';
+  grid.querySelectorAll('.noteBar.play').forEach(b=>b.classList.remove('play'));
   drawPlayhead();
+}
+// called each animation frame while playing: playhead + sounding-bar highlight
+function seqFrame(){
+  if(!seq.playing||!ac)return;
+  const pos=((ac.currentTime-seq.t0)/seq.barSec)%seq.loopBars;
+  seq.posBars=pos<0?0:pos;
+  drawPlayhead();
+  grid.querySelectorAll('.noteBar').forEach(b=>{
+    const s=+b.dataset.sb,l=+b.dataset.lb;
+    b.classList.toggle('play',seq.posBars>=s&&seq.posBars<s+l);
+  });
 }
 
 //// ---- presets ------------------------------------------------------------
@@ -926,11 +1049,17 @@ document.getElementById('fit').onclick=fitView;
 document.getElementById('zin').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,1.2);
 document.getElementById('zout').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,1/1.2);
 document.getElementById('seqPlay').onclick=()=>{seq.playing?seqStop():seqStart();};
-document.getElementById('seqClear').onclick=()=>{seqHits.clear();renderSeq();};
+document.getElementById('seqClear').onclick=()=>{hits=[];renderSeq();};
 document.getElementById('bpm').addEventListener('change',()=>{});
-document.getElementById('seqBars').addEventListener('change',e=>{STEPS=parseInt(e.target.value)*16;render();});
+document.getElementById('seqBars').addEventListener('change',e=>{BARS=parseInt(e.target.value);render();});
 document.getElementById('seqZin').onclick=()=>{seqZoom=Math.min(2,seqZoom*1.2);render();};
 document.getElementById('seqZout').onclick=()=>{seqZoom=Math.max(0.5,seqZoom/1.2);render();};
+document.getElementById('rhythmBtn').onclick=function(){
+  const p=document.getElementById('rpanel');
+  const show=p.style.display==='none';
+  p.style.display=show?'block':'none';
+  if(show)renderRhythm();
+};
 document.getElementById('seqViewBtn').onclick=function(){
   seqView=seqView==='roll'?'score':'roll';
   this.textContent=seqView==='roll'?'𝄞 Score':'▦ Roll';
@@ -955,20 +1084,19 @@ window.addEventListener('mousemove',e=>{
   document.getElementById('seq').style.height=h+'px';
 });
 window.addEventListener('mouseup',()=>{seqResize=null;});
-// note-length drag: registered once (state lives in seqDrag), preview via renderSeq
+// note-length drag: length extends in whole units of the note's snap division
 grid.addEventListener('mousemove',e=>{
   if(!seqDrag)return;
-  const r=grid.getBoundingClientRect(),cellW=18*seqZoom;
-  const relX=e.clientX-r.left-118+grid.scrollLeft;
-  const step=Math.min(STEPS-1,Math.max(seqDrag.startStep,Math.floor(relX/cellW)));
-  const newLen=Math.max(1,step-seqDrag.startStep+1);
-  if(newLen!==seqDrag.currentLength){seqDrag.currentLength=newLen;renderSeq();}
+  const r=grid.getBoundingClientRect();
+  const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
+  const h=seqDrag.hit,dv=seqDrag.div,step=dv.n/dv.d;
+  const units=Math.max(1,Math.ceil((xBars-frv(h.start))/step-0.25));
+  const newLen=fr(units*dv.n,dv.d);
+  if(!eqf(newLen,h.len)){h.len=newLen;renderSeq();}
 });
 window.addEventListener('mouseup',()=>{
-  if(!seqDrag)return;
-  seqHits.set(seqDrag.noteId+':'+seqDrag.oct+':'+seqDrag.startStep,seqDrag.currentLength);
-  seqDrag=null;
-  renderSeq();
+  if(!seqDrag){return;}
+  seqDrag=null;renderSeq();
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(tune.on)endTune(false);if(place.on)cancelPlace();}});
 
@@ -1021,6 +1149,7 @@ function animate(){
   notes.forEach(n=>{n.salience=Math.max(SAL_FLOOR,(n.salience||0)*dec);});
   if(nodeEls&&Object.keys(nodeEls).length)paintNodes();
   if(tune.on)renderTuningOverlay();
+  seqFrame();
   if(followOn&&!tune.on&&!place.on&&t>manualPanUntil){
     const c=salientCentroid();
     if(c){const w=svg.clientWidth,h=svg.clientHeight;
@@ -1032,7 +1161,7 @@ function animate(){
 
 // expose for tests
 window.__t={genCandidates,intervalHD,consonanceColor,johnston,fr,mul,cents,snapPick,impliedHub,
-  get notes(){return notes;},get seqHits(){return seqHits;},get place(){return place;},bump,paintNodes};
+  get notes(){return notes;},get hits(){return hits;},get place(){return place;},bump,paintNodes,timeSnap};
 
 //// ---- go -----------------------------------------------------------------
 loadPreset('major7');
