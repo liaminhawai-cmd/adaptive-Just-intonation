@@ -100,6 +100,7 @@
   .cell.play{background:#2a3450 !important}
   .noteBar{grid-row:1;height:20px;margin:2px 0;border-radius:4px;cursor:ew-resize;opacity:.85;display:flex;align-items:center;padding:0 6px;font-size:10px;color:#0a0c12;white-space:nowrap;overflow:hidden}
   .noteBar.play{opacity:1;box-shadow:0 0 8px rgba(255,212,121,.5)}
+  .noteBar.dragging{opacity:1;box-shadow:inset 0 0 0 2px #fff}
   .ghostline{position:absolute;left:118px;right:0;height:0;border-top:2px dashed #fff;pointer-events:none;z-index:4}
   .ghostlbl{position:absolute;background:#0a0c12;color:var(--acc2);font-size:11px;font-weight:700;
        padding:1px 6px;border-radius:5px;transform:translateY(-50%);pointer-events:none;z-index:5}
@@ -663,13 +664,15 @@ function renderSeq(){
     const covered=new Set();
     for(let s=0;s<STEPS;s++){
       if(covered.has(s))continue;
-      const len=seqHits.get(n.id+':'+s)||0;
+      // live drag preview overrides the stored length for the note being dragged
+      let len=seqHits.get(n.id+':'+s)||0;
+      if(seqDrag&&seqDrag.noteId===n.id&&seqDrag.startStep===s)len=seqDrag.currentLength;
       const playing=seq.cur>=s&&seq.cur<s+len;
       if(len>0){
         covered.add(s);
         for(let i=1;i<len;i++)if(s+i<STEPS)covered.add(s+i);
-        const wid=len*cellW;
-        html+=`<div class="noteBar${playing?' play':''}" data-id="${n.id}" data-step="${s}" data-len="${len}"
+        const dragging=seqDrag&&seqDrag.noteId===n.id&&seqDrag.startStep===s;
+        html+=`<div class="noteBar${playing?' play':''}${dragging?' dragging':''}" data-id="${n.id}" data-step="${s}" data-len="${len}"
           style="grid-column:2/${2+len};background:${consonanceColor(nodeHD(n))}"></div>`;
       }else{
         html+=`<div class="cell" data-id="${n.id}" data-step="${s}"></div>`;
@@ -699,21 +702,6 @@ function renderSeq(){
     });
     b.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();
       seqHits.delete(+b.dataset.id+':'+b.dataset.step);renderSeq();});
-  });
-  grid.addEventListener('mousemove',e=>{
-    if(!seqDrag)return;
-    const r=grid.getBoundingClientRect(),cellW=18*seqZoom;
-    const relX=e.clientX-r.left-118;
-    const step=Math.min(STEPS-1,Math.max(seqDrag.startStep,Math.floor(relX/cellW)));
-    seqDrag.currentLength=Math.max(1,step-seqDrag.startStep+1);
-    renderSeq();
-  });
-  window.addEventListener('mouseup',e=>{
-    if(!seqDrag)return;
-    const k=seqDrag.noteId+':'+seqDrag.startStep;
-    seqHits.set(k,seqDrag.currentLength);
-    seqDrag=null;
-    renderSeq();
   });
   grid.querySelectorAll('.lanelbl').forEach(l=>{
     l.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+l.dataset.id);});
@@ -833,6 +821,21 @@ document.getElementById('bpm').addEventListener('change',()=>{});
 document.getElementById('seqBars').addEventListener('change',e=>{STEPS=parseInt(e.target.value)*16;render();});
 document.getElementById('seqZin').onclick=()=>{seqZoom=Math.min(2,seqZoom*1.2);render();};
 document.getElementById('seqZout').onclick=()=>{seqZoom=Math.max(0.5,seqZoom/1.2);render();};
+// note-length drag: registered once (state lives in seqDrag), preview via renderSeq
+grid.addEventListener('mousemove',e=>{
+  if(!seqDrag)return;
+  const r=grid.getBoundingClientRect(),cellW=18*seqZoom;
+  const relX=e.clientX-r.left-118+grid.scrollLeft;
+  const step=Math.min(STEPS-1,Math.max(seqDrag.startStep,Math.floor(relX/cellW)));
+  const newLen=Math.max(1,step-seqDrag.startStep+1);
+  if(newLen!==seqDrag.currentLength){seqDrag.currentLength=newLen;renderSeq();}
+});
+window.addEventListener('mouseup',()=>{
+  if(!seqDrag)return;
+  seqHits.set(seqDrag.noteId+':'+seqDrag.startStep,seqDrag.currentLength);
+  seqDrag=null;
+  renderSeq();
+});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(tune.on)endTune(false);if(place.on)cancelPlace();}});
 
 // lattice pan/zoom/tune
