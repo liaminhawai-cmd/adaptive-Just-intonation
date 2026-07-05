@@ -98,6 +98,8 @@
   .cell:nth-child(4n+2){border-left:1px solid #2c3140}
   .cell.on{box-shadow:inset 0 0 0 2px #0a0c12}
   .cell.play{background:#2a3450 !important}
+  .noteBar{grid-row:1;height:20px;margin:2px 0;border-radius:4px;cursor:ew-resize;opacity:.85;display:flex;align-items:center;padding:0 6px;font-size:10px;color:#0a0c12;white-space:nowrap;overflow:hidden}
+  .noteBar.play{opacity:1;box-shadow:0 0 8px rgba(255,212,121,.5)}
   .ghostline{position:absolute;left:118px;right:0;height:0;border-top:2px dashed #fff;pointer-events:none;z-index:4}
   .ghostlbl{position:absolute;background:#0a0c12;color:var(--acc2);font-size:11px;font-weight:700;
        padding:1px 6px;border-radius:5px;transform:translateY(-50%);pointer-events:none;z-index:5}
@@ -552,7 +554,7 @@ function toggleSel(id){if(selected.has(id))selected.delete(id);else selected.add
 function delNote(id){
   notes.filter(n=>n.parent===id).forEach(n=>{n.parent=0;});
   notes=notes.filter(n=>n.id!==id);selected.delete(id);
-  [...seqHits].forEach(k=>{if(k.startsWith(id+':'))seqHits.delete(k);});
+  [...seqHits.keys()].forEach(k=>{if(k.startsWith(id+':'))seqHits.delete(k);});
   render();
 }
 
@@ -635,7 +637,8 @@ document.getElementById('midiMode').addEventListener('change',e=>{midiMode=e.tar
 //// ---- sequencer ----------------------------------------------------------
 let STEPS=16;
 let seqZoom=1;  // cell width multiplier
-let seqHits=new Set();           // "noteId:step"
+let seqHits=new Map();           // "noteId:step" -> length (in steps)
+let seqDrag=null;                // {noteId, startStep, currentLength}
 let seq={playing:false,timer:null,cur:-1};
 let place={on:false,src:null,level:2,cands:[],cur:null,step:0,acc:0};
 const grid=document.getElementById('seqgrid');
@@ -657,24 +660,60 @@ function renderSeq(){
     const isSrc=place.on&&place.src&&place.src.id===n.id;
     html+=`<div class="lane${isSrc?' src':''}" data-id="${n.id}" style="grid-template-columns:${gridCols}">
       <div class="lanelbl" data-id="${n.id}"><span class="jn">${nameOf(n)}</span><span class="rt">${n.ratio.n}/${n.ratio.d}</span></div>`;
+    const covered=new Set();
     for(let s=0;s<STEPS;s++){
-      const on=seqHits.has(n.id+':'+s);
-      const playing=seq.cur===s;
-      html+=`<div class="cell${on?' on':''}${playing?' play':''}" data-id="${n.id}" data-step="${s}"
-        style="${on?`background:${consonanceColor(nodeHD(n))}`:''}"></div>`;
+      if(covered.has(s))continue;
+      const len=seqHits.get(n.id+':'+s)||0;
+      const playing=seq.cur>=s&&seq.cur<s+len;
+      if(len>0){
+        covered.add(s);
+        for(let i=1;i<len;i++)if(s+i<STEPS)covered.add(s+i);
+        const wid=len*cellW;
+        html+=`<div class="noteBar${playing?' play':''}" data-id="${n.id}" data-step="${s}" data-len="${len}"
+          style="grid-column:2/${2+len};background:${consonanceColor(nodeHD(n))}"></div>`;
+      }else{
+        html+=`<div class="cell" data-id="${n.id}" data-step="${s}"></div>`;
+      }
     }
     html+=`</div>`;
   });
   grid.innerHTML=html;
-  // wire cells
+  // wire cells and note bars
   grid.querySelectorAll('.cell').forEach(c=>{
-    c.addEventListener('click',e=>{
-      if(place.on){commitPlace();return;}
-      const id=+c.dataset.id,s=+c.dataset.step,k=id+':'+s;
-      if(seqHits.has(k))seqHits.delete(k);else{seqHits.add(k);playNote(notes.find(n=>n.id===id));}
+    c.addEventListener('mousedown',e=>{
+      if(place.on)return;
+      e.preventDefault();
+      const id=+c.dataset.id,s=+c.dataset.step;
+      seqDrag={noteId:id,startStep:s,currentLength:1};
+      playNote(notes.find(n=>n.id===id));
       renderSeq();
     });
     c.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+c.dataset.id);});
+  });
+  grid.querySelectorAll('.noteBar').forEach(b=>{
+    b.addEventListener('mousedown',e=>{
+      if(place.on)return;
+      e.preventDefault();
+      const id=+b.dataset.id,s=+b.dataset.step;
+      seqDrag={noteId:id,startStep:s,currentLength:+b.dataset.len};
+    });
+    b.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();
+      seqHits.delete(+b.dataset.id+':'+b.dataset.step);renderSeq();});
+  });
+  grid.addEventListener('mousemove',e=>{
+    if(!seqDrag)return;
+    const r=grid.getBoundingClientRect(),cellW=18*seqZoom;
+    const relX=e.clientX-r.left-118;
+    const step=Math.min(STEPS-1,Math.max(seqDrag.startStep,Math.floor(relX/cellW)));
+    seqDrag.currentLength=Math.max(1,step-seqDrag.startStep+1);
+    renderSeq();
+  });
+  window.addEventListener('mouseup',e=>{
+    if(!seqDrag)return;
+    const k=seqDrag.noteId+':'+seqDrag.startStep;
+    seqHits.set(k,seqDrag.currentLength);
+    seqDrag=null;
+    renderSeq();
   });
   grid.querySelectorAll('.lanelbl').forEach(l=>{
     l.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+l.dataset.id);});
@@ -725,7 +764,7 @@ function drawPlaceGhost(){
 function commitPlace(){
   if(place.cur){
     const note=addNote(place.src.id,place.cur.ratio);
-    if(note){seqHits.add(note.id+':'+place.step);playNote(note);}
+    if(note){seqHits.set(note.id+':'+place.step,1);playNote(note);}
   }
   cancelPlace();
 }
@@ -739,7 +778,10 @@ function seqStart(){
   const tick=()=>{
     seq.cur=(seq.cur+1)%STEPS;
     const t=audio().currentTime;
-    notes.forEach(n=>{if(seqHits.has(n.id+':'+seq.cur)){bump(n);const hz=noteFreq(n.ratio),dur=Math.min(0.9,stepMs()/1000*2);playFreq(hz,t,dur,0.2);midiPlay(hz,dur);}});
+    notes.forEach(n=>{
+      const len=seqHits.get(n.id+':'+seq.cur);
+      if(len){bump(n);const hz=noteFreq(n.ratio),dur=Math.min(0.9,len*stepMs()/1000);playFreq(hz,t,dur,0.2);midiPlay(hz,dur);}
+    });
     updatePlayCells();
     seq.timer=setTimeout(tick,stepMs());
   };
