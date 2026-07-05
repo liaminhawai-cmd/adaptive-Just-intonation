@@ -103,6 +103,11 @@
   .noteBar{grid-row:1;height:20px;margin:2px 0;border-radius:4px;cursor:ew-resize;opacity:.85;display:flex;align-items:center;padding:0 6px;font-size:10px;color:#0a0c12;white-space:nowrap;overflow:hidden}
   .noteBar.play{opacity:1;box-shadow:0 0 8px rgba(255,212,121,.5)}
   .noteBar.dragging{opacity:1;box-shadow:inset 0 0 0 2px #fff}
+  .octn{color:var(--dim);font-weight:400;font-size:10px;margin-left:1px}
+  .lane.rootoct .lanelbl{border-left:2px solid #3a4154}
+  .x.gm.on{color:var(--acc2)}
+  .seqgrip{position:absolute;top:-3px;left:0;right:0;height:7px;cursor:ns-resize;z-index:6}
+  .seqgrip:hover{background:rgba(122,162,255,.25)}
   .ghostline{position:absolute;left:118px;right:0;height:0;border-top:2px dashed #fff;pointer-events:none;z-index:4}
   .ghostlbl{position:absolute;background:#0a0c12;color:var(--acc2);font-size:11px;font-weight:700;
        padding:1px 6px;border-radius:5px;transform:translateY(-50%);pointer-events:none;z-index:5}
@@ -133,7 +138,13 @@
   <div class="preview" id="preview"></div>
 
   <h2>Notes <span class="muted" id="count"></span></h2>
-  <table id="tbl"><thead><tr><th></th><th>Johnston</th><th>ratio</th><th class="r">cents</th><th class="r">Hz</th><th class="r">HD</th><th></th></tr></thead><tbody></tbody></table>
+  <table id="tbl"><thead><tr><th></th><th>Johnston</th><th>ratio</th><th class="r">cents</th><th class="r">Hz</th><th class="r">HD</th><th title="in current key signature (sequencer lanes)">♪</th><th></th></tr></thead><tbody></tbody></table>
+  <div class="chips">
+    <button class="chip ghost" id="gamSel" title="Key signature = only the selected notes get sequencer lanes">key = selected</button>
+    <button class="chip ghost" id="gamAll" title="Every pitch class gets sequencer lanes">key = all</button>
+  </div>
+  <p class="hint">♪ = in the current <b>key signature</b>: only those pitch classes get sequencer lanes
+    (each in every octave). Comma-pump freely on the lattice, keep the grid to ~7 notes, re-key as you go.</p>
 
   <h2>MIDI Output <span class="muted">(→ FL Studio)</span></h2>
   <div class="row"><button id="midiEnable" class="primary">Enable MIDI</button></div>
@@ -183,8 +194,10 @@
   </div>
 
   <div id="seq">
+    <div class="seqgrip" id="seqGrip" title="drag to resize"></div>
     <div class="seqhead">
       <button id="seqPlay" class="primary">▶ Play</button>
+      <button id="seqViewBtn" class="ghost" title="Toggle piano-roll / Ben Johnston staff notation">𝄞 Score</button>
       <span class="t">BPM</span><input id="bpm" type="number" value="100" min="20" max="300" step="1"/>
       <span class="t">bars</span><select id="seqBars"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select>
       <button id="seqZin" class="ghost" style="width:auto;padding:6px 8px" title="Zoom in">+</button>
@@ -272,26 +285,19 @@ function noteFreq(f){return rootFreq()*f.n/f.d;}
 function nameOf(n){return n.id===0?rootName():johnston(n.ratio);}
 function bump(n){if(n)n.salience=Math.min(SAL_MAX,(n.salience||0)+1);}
 
+// Notes are PITCH CLASSES: ratios are octave-reduced to [1,2). Octaves are not
+// separate notes — the sequencer gives every pitch class a lane in every octave.
 function addNote(parentId,interval){
   const p=notes.find(n=>n.id===parentId); if(!p)return null;
-  const ratio=mul(p.ratio,interval);
-  // dedupe: if a note with this ratio exists, reuse it
+  const ratio=octReduce(mul(p.ratio,interval));
+  // dedupe: if a note with this pitch class exists, reuse it (and re-admit to gamut)
   const ex=notes.find(n=>eqf(n.ratio,ratio));
-  if(ex){selected.clear();selected.add(ex.id);bump(ex);render();return ex;}
+  if(ex){ex.gamut=true;selected.clear();selected.add(ex.id);bump(ex);render();return ex;}
   const id=nextId++;
-  const note={id,ratio,parent:parentId,interval,name:johnston(ratio),salience:1.2,octaveRoot:id};
-  notes.push(note);
-  // auto-generate octaves: ±2 octaves
-  for(let o=-2;o<=2;o++){
-    if(o===0)continue;
-    const octRatio=o>0?mul(ratio,fr(Math.pow(2,o),1)):mul(ratio,fr(1,Math.pow(2,-o)));
-    const octId=nextId++;
-    const octNote={id:octId,ratio:octRatio,parent:parentId,interval:mul(interval,fr(Math.pow(2,o),1)),
-      name:johnston(octRatio),salience:0.6,octaveRoot:id,octaveShift:o};
-    notes.push(octNote);
-  }
-  selected.clear();selected.add(id);render();return note;
+  const note={id,ratio,parent:parentId,interval,name:johnston(ratio),salience:1.2,gamut:true};
+  notes.push(note);selected.clear();selected.add(id);render();return note;
 }
+function gamutNotes(){return notes.filter(n=>n.gamut!==false);}
 
 //// ---- active context -----------------------------------------------------
 // weight = salience (decaying recency accumulator) + a boost while selected.
@@ -335,14 +341,14 @@ const LIMIT_LEVELS=[
   {primes:[2,3,5,7,11], label:'+ 11 (11-limit)'},
   {primes:[2,3,5,7,11,13],label:'+ 13 (13-limit)'},
 ];
-const PBOUND={2:2,3:3,5:2,7:1,11:1,13:1};
+const PBOUND={2:3,3:3,5:2,7:1,11:1,13:1};
 function genCandidates(level){
   const primes=LIMIT_LEVELS[level].primes;
   const seen=new Map();
   (function rec(i,n,d){
     if(i===primes.length){
       const f=fr(n,d),c=cents(f);
-      if(c>=-1250&&c<=2450){const k=f.n+'/'+f.d;
+      if(c>=-2850&&c<=2850){const k=f.n+'/'+f.d;
         if(!seen.has(k))seen.set(k,{ratio:f,cents:c,hd:log2(f.n*f.d)});}
       return;
     }
@@ -372,15 +378,19 @@ function renderTable(){
   document.getElementById('count').textContent='('+notes.length+')';
   notes.slice().sort((a,b)=>cents(a.ratio)-cents(b.ratio)).forEach(n=>{
     const tr=document.createElement('tr');tr.className='note'+(selected.has(n.id)?' sel':'');
+    const inGam=n.gamut!==false;
     tr.innerHTML=`<td><span class="swatch" style="background:${consonanceColor(nodeHD(n))}"></span></td>
       <td>${nameOf(n)}${n.id===0?' <span class="muted">(root)</span>':''}</td>
       <td class="r">${n.ratio.n}/${n.ratio.d}</td>
       <td class="r">${cents(n.ratio).toFixed(1)}</td>
       <td class="r">${noteFreq(n.ratio).toFixed(2)}</td>
       <td class="r">${log2(n.ratio.n*n.ratio.d).toFixed(2)}</td>
+      <td><button class="x gm${inGam?' on':''}" title="toggle sequencer lanes (key signature)">${inGam?'♪':'·'}</button></td>
       <td>${n.id!==0?'<button class="x" title="delete">✕</button>':''}</td>`;
     tr.onclick=e=>{if(e.target.classList.contains('x'))return;toggleSel(n.id);playNote(n);};
-    const x=tr.querySelector('.x'); if(x)x.onclick=e=>{e.stopPropagation();delNote(n.id);};
+    const gm=tr.querySelector('.gm');
+    gm.onclick=e=>{e.stopPropagation();n.gamut=(n.gamut===false);render();};
+    const x=tr.querySelector('.x:not(.gm)'); if(x)x.onclick=e=>{e.stopPropagation();delNote(n.id);};
     tb.appendChild(tr);
   });
 }
@@ -528,7 +538,7 @@ function renderTuningOverlay(){
   if(!tune.on){ov.innerHTML='';return;}
   const pos={};notes.forEach(n=>pos[n.id]=latticeXY(n.ratio));
   const pp=latticeXY(tune.parent.ratio);let s='';
-  const top=pp.y-2450*PXCENT,bot=pp.y+1250*PXCENT;
+  const top=pp.y-2850*PXCENT,bot=pp.y+2850*PXCENT;
   s+=`<line class="ribbon" x1="${pp.x}" y1="${top}" x2="${pp.x}" y2="${bot}"/>`;
   tune.cands.forEach(c=>{
     if(c.hd>5.6)return;
@@ -641,44 +651,80 @@ document.getElementById('midiMode').addEventListener('change',e=>{midiMode=e.tar
 //// ---- sequencer ----------------------------------------------------------
 let STEPS=16;
 let seqZoom=1;  // cell width multiplier
-let seqHits=new Map();           // "noteId:step" -> length (in steps)
-let seqDrag=null;                // {noteId, startStep, currentLength}
+let seqView='roll';              // 'roll' | 'score'
+let seqAutoScroll=true;          // scroll middle octave into view on next roll render
+let seqHits=new Map();           // "noteId:oct:step" -> length (in steps)
+let seqDrag=null;                // {noteId, oct, startStep, currentLength}
 let seq={playing:false,timer:null,cur:-1};
-let place={on:false,src:null,level:2,cands:[],cur:null,step:0,acc:0};
+let place={on:false,src:null,srcOct:0,level:2,cands:[],cur:null,step:0,acc:0};
 const grid=document.getElementById('seqgrid');
 const seqBanner=document.getElementById('seqBanner');
 
-function pitchRange(){ // absolute cents range for the placement axis
-  let lo=0,hi=1200;
-  notes.forEach(n=>{const c=cents(n.ratio);lo=Math.min(lo,c);hi=Math.max(hi,c);});
-  return {lo:lo-120,hi:hi+120};
+// lanes = every gamut pitch class in every octave, high at top.
+// oct 0 = the root octave (root freq itself); range C2..B6-ish around it.
+const OCTS=[2,1,0,-1,-2];
+const LANE_H=24;
+function laneRows(){
+  const pcs=gamutNotes().slice().sort((a,b)=>cents(b.ratio)-cents(a.ratio));
+  const rows=[];
+  OCTS.forEach(o=>pcs.forEach(n=>rows.push({n,oct:o})));
+  return rows;
 }
-function laneRows(){return notes.slice().sort((a,b)=>cents(b.ratio)-cents(a.ratio));} // high at top
+const rowAbsCents=r=>cents(r.n.ratio)+1200*r.oct;
+// piecewise map between content-y and absolute cents, anchored to lane centres,
+// so the placement ghost lines up with the lanes it passes.
+function yToCents(y,rows){
+  const rc=rows.map(rowAbsCents);
+  if(!rc.length)return 0;
+  const f=Math.max(0,Math.min(rc.length-1,y/LANE_H-0.5));
+  const i=Math.floor(f),t=f-i,b=Math.min(i+1,rc.length-1);
+  return rc[i]+(rc[b]-rc[i])*t;
+}
+function centsToY(c,rows){
+  const rc=rows.map(rowAbsCents);
+  if(!rc.length)return 0;
+  if(c>=rc[0])return LANE_H/2;
+  for(let i=0;i<rc.length-1;i++){
+    if(c<=rc[i]&&c>=rc[i+1]){
+      const t=(rc[i]-c)/((rc[i]-rc[i+1])||1);
+      return (i+t+0.5)*LANE_H;
+    }
+  }
+  return (rc.length-0.5)*LANE_H;
+}
 
+function laneFreq(n,oct){return noteFreq(n.ratio)*Math.pow(2,oct);}
+function playLane(n,oct,dur=0.5){
+  bump(n);const hz=laneFreq(n,oct);
+  playFreq(hz,audio().currentTime,dur);midiPlay(hz,dur);
+}
 function renderSeq(){
+  if(seqView==='score'){renderScore();drawPlayhead();return;}
   const rows=laneRows();
   const cellW=18*seqZoom;
   const gridCols=`118px repeat(${STEPS},${cellW}px)`;
   let html='';
-  rows.forEach(n=>{
-    const isSrc=place.on&&place.src&&place.src.id===n.id;
-    html+=`<div class="lane${isSrc?' src':''}" data-id="${n.id}" style="grid-template-columns:${gridCols}">
-      <div class="lanelbl" data-id="${n.id}"><span class="jn">${nameOf(n)}</span><span class="rt">${n.ratio.n}/${n.ratio.d}</span></div>`;
+  rows.forEach(({n,oct})=>{
+    const isSrc=place.on&&place.src&&place.src.id===n.id&&place.srcOct===oct;
+    const octLbl=4+oct; // root octave displayed as 4 (C4 ≈ middle C)
+    html+=`<div class="lane${isSrc?' src':''}${oct===0?' rootoct':''}" data-id="${n.id}" data-oct="${oct}" style="grid-template-columns:${gridCols}">
+      <div class="lanelbl" data-id="${n.id}" data-oct="${oct}"><span class="jn">${nameOf(n)}<span class="octn">${octLbl}</span></span><span class="rt">${n.ratio.n}/${n.ratio.d}</span></div>`;
     const covered=new Set();
     for(let s=0;s<STEPS;s++){
       if(covered.has(s))continue;
+      const key=n.id+':'+oct+':'+s;
       // live drag preview overrides the stored length for the note being dragged
-      let len=seqHits.get(n.id+':'+s)||0;
-      if(seqDrag&&seqDrag.noteId===n.id&&seqDrag.startStep===s)len=seqDrag.currentLength;
+      let len=seqHits.get(key)||0;
+      if(seqDrag&&seqDrag.noteId===n.id&&seqDrag.oct===oct&&seqDrag.startStep===s)len=seqDrag.currentLength;
       const playing=seq.cur>=s&&seq.cur<s+len;
       if(len>0){
         covered.add(s);
         for(let i=1;i<len;i++)if(s+i<STEPS)covered.add(s+i);
-        const dragging=seqDrag&&seqDrag.noteId===n.id&&seqDrag.startStep===s;
-        html+=`<div class="noteBar${playing?' play':''}${dragging?' dragging':''}" data-id="${n.id}" data-step="${s}" data-len="${len}"
+        const dragging=seqDrag&&seqDrag.noteId===n.id&&seqDrag.oct===oct&&seqDrag.startStep===s;
+        html+=`<div class="noteBar${playing?' play':''}${dragging?' dragging':''}" data-id="${n.id}" data-oct="${oct}" data-step="${s}" data-len="${len}"
           style="grid-column:${2+s}/${2+s+len};background:${consonanceColor(nodeHD(n))}"></div>`;
       }else{
-        html+=`<div class="cell" data-id="${n.id}" data-step="${s}" style="grid-column:${2+s}"></div>`;
+        html+=`<div class="cell" data-id="${n.id}" data-oct="${oct}" data-step="${s}" style="grid-column:${2+s}"></div>`;
       }
     }
     html+=`</div>`;
@@ -687,30 +733,72 @@ function renderSeq(){
   // wire cells and note bars
   grid.querySelectorAll('.cell').forEach(c=>{
     c.addEventListener('mousedown',e=>{
-      if(place.on)return;
+      if(place.on){commitPlace();return;}
       e.preventDefault();
-      const id=+c.dataset.id,s=+c.dataset.step;
-      seqDrag={noteId:id,startStep:s,currentLength:1};
-      playNote(notes.find(n=>n.id===id));
+      const id=+c.dataset.id,oct=+c.dataset.oct,s=+c.dataset.step;
+      seqDrag={noteId:id,oct,startStep:s,currentLength:1};
+      playLane(notes.find(n=>n.id===id),oct);
       renderSeq();
     });
-    c.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+c.dataset.id);});
+    c.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+c.dataset.id,+c.dataset.oct);});
   });
   grid.querySelectorAll('.noteBar').forEach(b=>{
     b.addEventListener('mousedown',e=>{
-      if(place.on)return;
+      if(place.on){commitPlace();return;}
       e.preventDefault();
-      const id=+b.dataset.id,s=+b.dataset.step;
-      seqDrag={noteId:id,startStep:s,currentLength:+b.dataset.len};
+      seqDrag={noteId:+b.dataset.id,oct:+b.dataset.oct,startStep:+b.dataset.step,currentLength:+b.dataset.len};
     });
     b.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();
-      seqHits.delete(+b.dataset.id+':'+b.dataset.step);renderSeq();});
+      seqHits.delete(b.dataset.id+':'+b.dataset.oct+':'+b.dataset.step);renderSeq();});
   });
   grid.querySelectorAll('.lanelbl').forEach(l=>{
-    l.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+l.dataset.id);});
-    l.addEventListener('click',()=>{const n=notes.find(x=>x.id===+l.dataset.id);toggleSel(n.id);playNote(n);});
+    l.addEventListener('contextmenu',e=>{e.preventDefault();startPlace(+l.dataset.id,+l.dataset.oct);});
+    l.addEventListener('click',()=>{const n=notes.find(x=>x.id===+l.dataset.id);toggleSel(n.id);playLane(n,+l.dataset.oct);});
   });
+  if(seqAutoScroll){
+    const i=rows.findIndex(r=>r.oct===0);
+    if(i>=0)grid.scrollTop=Math.max(0,i*LANE_H-grid.clientHeight/2+LANE_H*2);
+    seqAutoScroll=false;
+  }
   drawPlaceGhost();drawPlayhead();
+}
+
+//// score view (Ben Johnston staff notation, read-only)
+const LETTER_IDX={C:0,D:1,E:2,F:3,G:4,A:5,B:6};
+function renderScore(){
+  const cellW=18*seqZoom;
+  const W=118+STEPS*cellW+20, hs=5, yOf=d=>25+(48-d)*hs, H=yOf(14)+25;
+  let s='';
+  // staff lines: treble E4..F5 (d 30..38), bass G2..A3 (d 18..26)
+  [30,32,34,36,38,18,20,22,24,26].forEach(d=>
+    s+=`<line x1="118" y1="${yOf(d)}" x2="${W-10}" y2="${yOf(d)}" stroke="#3a4154"/>`);
+  // bar lines each 16 steps
+  for(let b=0;b<=STEPS;b+=16){const x=118+b*cellW;
+    s+=`<line x1="${x}" y1="${yOf(38)}" x2="${x}" y2="${yOf(18)}" stroke="#2a2e3a"/>`;}
+  // clefs (unicode; falls back harmlessly if the glyph is missing)
+  s+=`<text x="96" y="${yOf(32)+9}" font-size="30" fill="#969bab">𝄞</text>`;
+  s+=`<text x="96" y="${yOf(24)+7}" font-size="26" fill="#969bab">𝄢</text>`;
+  s+=`<text x="8" y="30" font-size="11" fill="#969bab">score view</text>`;
+  s+=`<text x="8" y="44" font-size="10" fill="#5a5f6e">(read-only — edit in Roll)</text>`;
+  seqHits.forEach((len,k)=>{
+    const parts=k.split(':');
+    const id=+parts[0],oct=+parts[1],st=+parts[2];
+    const n=notes.find(x=>x.id===id);if(!n)return;
+    const name=nameOf(n),m=name.match(/^([A-G])(.*)$/);
+    let d,acc;
+    if(m){d=(4+oct)*7+LETTER_IDX[m[1]];acc=m[2];}
+    else{const tc=cents(n.ratio)+1200*oct;d=28+Math.round(7*tc/1200);acc=name;} // >13-limit fallback
+    const x=118+st*cellW+8,y=yOf(d);
+    // ledger lines
+    for(let L=40;L<=d;L+=2)s+=`<line x1="${x-9}" y1="${yOf(L)}" x2="${x+9}" y2="${yOf(L)}" stroke="#3a4154"/>`;
+    for(let L=16;L>=d;L-=2)s+=`<line x1="${x-9}" y1="${yOf(L)}" x2="${x+9}" y2="${yOf(L)}" stroke="#3a4154"/>`;
+    if(d===27||d===28)s+=`<line x1="${x-9}" y1="${yOf(28)}" x2="${x+9}" y2="${yOf(28)}" stroke="#3a4154"/>`;
+    const col=consonanceColor(nodeHD(n));
+    if(len>1)s+=`<line x1="${x+7}" y1="${y}" x2="${118+(st+len)*cellW-4}" y2="${y}" stroke="${col}" stroke-width="2" opacity=".55"/>`;
+    s+=`<ellipse cx="${x}" cy="${y}" rx="6" ry="4.2" fill="${col}" stroke="#0a0c12"/>`;
+    if(acc)s+=`<text x="${x-8}" y="${y+3.5}" text-anchor="end" font-size="10" fill="#e7e9ef">${acc}</text>`;
+  });
+  grid.innerHTML=`<svg width="${W}" height="${H}" style="display:block">${s}</svg>`;
 }
 function drawPlayhead(){
   let ph=grid.querySelector('.ph');
@@ -718,44 +806,55 @@ function drawPlayhead(){
   if(!ph){ph=document.createElement('div');ph.className='ph';grid.appendChild(ph);}
   const cellW=18*seqZoom;
   ph.style.left=(118+seq.cur*cellW)+'px';
+  // cover the full scrollable content, not just the viewport
+  const h=seqView==='score'?(grid.firstChild?grid.firstChild.getAttribute('height'):0):laneRows().length*LANE_H;
+  ph.style.bottom='auto';ph.style.height=h+'px';
 }
 //// placement (tune-by-drag inside the sequencer)
-function startPlace(srcId){
+function startPlace(srcId,srcOct=0){
   const src=notes.find(n=>n.id===srcId);if(!src)return;
-  place={on:true,src,level:place.level??2,cands:genCandidates(place.level??2),cur:null,step:0,acc:0};
-  seqBanner.textContent=`placing from ${nameOf(src)} (${src.ratio.n}/${src.ratio.d}) — move vertically to lock a ratio, scroll=limit, click to drop · Esc cancels`;
+  place={on:true,src,srcOct,level:place.level??2,cands:genCandidates(place.level??2),cur:null,step:0,acc:0};
+  seqBanner.textContent=`placing from ${nameOf(src)}${4+srcOct} (${src.ratio.n}/${src.ratio.d}) — move vertically to lock a ratio, scroll=limit, click to drop · Esc cancels`;
   renderSeq();
 }
+function srcAbsCents(){return cents(place.src.ratio)+1200*place.srcOct;}
 function updatePlace(clientX,clientY){
   if(!place.on)return;
   const r=grid.getBoundingClientRect();
-  const {lo,hi}=pitchRange();
-  const fracY=Math.min(1,Math.max(0,(clientY-r.top)/r.height));
-  const targetAbs=hi-fracY*(hi-lo);                    // top=hi
-  const targetRel=targetAbs-cents(place.src.ratio);    // interval cents from source
+  const rows=laneRows();
+  const y=(clientY-r.top)+grid.scrollTop;      // content coords
+  const targetAbs=yToCents(y,rows);
+  const targetRel=targetAbs-srcAbsCents();     // interval cents from source lane
   place.cur=snapPick(place.cands,targetRel);
   const cellW=18*seqZoom;
-  place.step=Math.min(STEPS-1,Math.max(0,Math.floor((clientX-r.left-118)/cellW)));
-  if(place.step<0)place.step=0;
+  place.step=Math.min(STEPS-1,Math.max(0,Math.floor((clientX-r.left-118+grid.scrollLeft)/cellW)));
   drawPlaceGhost();
 }
 function drawPlaceGhost(){
   grid.querySelectorAll('.ghostline,.ghostlbl').forEach(e=>e.remove());
   if(!place.on||!place.cur)return;
-  const {lo,hi}=pitchRange();
-  const abs=cents(place.src.ratio)+place.cur.cents;
-  const fracY=(hi-abs)/(hi-lo);
-  const y=fracY*grid.clientHeight;
+  const rows=laneRows();
+  const abs=srcAbsCents()+place.cur.cents;
+  const y=centsToY(abs,rows);
   const line=document.createElement('div');line.className='ghostline';line.style.top=y+'px';
-  const gf=mul(place.src.ratio,place.cur.ratio);
+  const srcAbsRatio=place.srcOct>=0?mul(place.src.ratio,fr(Math.pow(2,place.srcOct),1))
+                                   :mul(place.src.ratio,fr(1,Math.pow(2,-place.srcOct)));
+  const gf=mul(srcAbsRatio,place.cur.ratio);
+  const pc=octReduce(gf);
   const lbl=document.createElement('div');lbl.className='ghostlbl';lbl.style.top=y+'px';lbl.style.left='124px';
-  lbl.textContent=`${johnston(gf)}  ${gf.n}/${gf.d}  ·  step ${place.step+1}`;
+  lbl.textContent=`${johnston(pc)}  ${place.cur.ratio.n}/${place.cur.ratio.d} from source  ·  step ${place.step+1}`;
   grid.appendChild(line);grid.appendChild(lbl);
 }
 function commitPlace(){
   if(place.cur){
-    const note=addNote(place.src.id,place.cur.ratio);
-    if(note){seqHits.set(note.id+':'+place.step,1);playNote(note);}
+    const note=addNote(place.src.id,place.cur.ratio);   // adds/reuses the pitch class
+    if(note){
+      const abs=srcAbsCents()+place.cur.cents;
+      let oct=Math.round((abs-cents(note.ratio))/1200);
+      oct=Math.max(OCTS[OCTS.length-1],Math.min(OCTS[0],oct));
+      seqHits.set(note.id+':'+oct+':'+place.step,1);
+      playLane(note,oct);
+    }
   }
   cancelPlace();
 }
@@ -769,9 +868,13 @@ function seqStart(){
   const tick=()=>{
     seq.cur=(seq.cur+1)%STEPS;
     const t=audio().currentTime;
-    notes.forEach(n=>{
-      const len=seqHits.get(n.id+':'+seq.cur);
-      if(len){bump(n);const hz=noteFreq(n.ratio),dur=Math.min(0.9,len*stepMs()/1000);playFreq(hz,t,dur,0.2);midiPlay(hz,dur);}
+    seqHits.forEach((len,k)=>{
+      const parts=k.split(':');
+      if(+parts[2]!==seq.cur)return;
+      const n=notes.find(x=>x.id===+parts[0]);if(!n)return;
+      bump(n);
+      const hz=laneFreq(n,+parts[1]),dur=Math.min(2.5,len*stepMs()/1000);
+      playFreq(hz,t,dur,0.2);midiPlay(hz,dur);
     });
     updatePlayCells();
     seq.timer=setTimeout(tick,stepMs());
@@ -783,6 +886,10 @@ function seqStop(){seq.playing=false;clearTimeout(seq.timer);seq.cur=-1;
 function updatePlayCells(){
   grid.querySelectorAll('.cell.play').forEach(c=>c.classList.remove('play'));
   if(seq.cur>=0)grid.querySelectorAll(`.cell[data-step="${seq.cur}"]`).forEach(c=>c.classList.add('play'));
+  grid.querySelectorAll('.noteBar').forEach(b=>{
+    const s=+b.dataset.step,l=+b.dataset.len;
+    b.classList.toggle('play',seq.cur>=s&&seq.cur<s+l);
+  });
   drawPlayhead();
 }
 
@@ -796,9 +903,9 @@ function loadPreset(key){
   addRoot();
   if(key!=='clear'&&PRESETS[key]){
     PRESETS[key].forEach((r,i)=>{if(i===0)return;const iv=parseRatio(r);
-      notes.push({id:nextId++,ratio:iv,parent:0,interval:iv,name:johnston(iv),played:0});});
+      notes.push({id:nextId++,ratio:iv,parent:0,interval:iv,name:johnston(iv),salience:0.5,gamut:true});});
   }
-  selected.clear();render();fitView();
+  selected.clear();seqAutoScroll=true;render();fitView();
 }
 
 //// ---- wiring -------------------------------------------------------------
@@ -824,6 +931,30 @@ document.getElementById('bpm').addEventListener('change',()=>{});
 document.getElementById('seqBars').addEventListener('change',e=>{STEPS=parseInt(e.target.value)*16;render();});
 document.getElementById('seqZin').onclick=()=>{seqZoom=Math.min(2,seqZoom*1.2);render();};
 document.getElementById('seqZout').onclick=()=>{seqZoom=Math.max(0.5,seqZoom/1.2);render();};
+document.getElementById('seqViewBtn').onclick=function(){
+  seqView=seqView==='roll'?'score':'roll';
+  this.textContent=seqView==='roll'?'𝄞 Score':'▦ Roll';
+  if(seqView==='roll')seqAutoScroll=true;
+  renderSeq();
+};
+document.getElementById('gamSel').onclick=()=>{
+  if(!selected.size)return;
+  notes.forEach(n=>{n.gamut=selected.has(n.id);});
+  seqAutoScroll=true;render();
+};
+document.getElementById('gamAll').onclick=()=>{notes.forEach(n=>{n.gamut=true;});seqAutoScroll=true;render();};
+// sequencer panel resize (drag top edge)
+let seqResize=null;
+document.getElementById('seqGrip').addEventListener('mousedown',e=>{
+  e.preventDefault();
+  seqResize={y:e.clientY,h:document.getElementById('seq').offsetHeight};
+});
+window.addEventListener('mousemove',e=>{
+  if(!seqResize)return;
+  const h=Math.max(120,Math.min(window.innerHeight-160,seqResize.h+(seqResize.y-e.clientY)));
+  document.getElementById('seq').style.height=h+'px';
+});
+window.addEventListener('mouseup',()=>{seqResize=null;});
 // note-length drag: registered once (state lives in seqDrag), preview via renderSeq
 grid.addEventListener('mousemove',e=>{
   if(!seqDrag)return;
@@ -835,7 +966,7 @@ grid.addEventListener('mousemove',e=>{
 });
 window.addEventListener('mouseup',()=>{
   if(!seqDrag)return;
-  seqHits.set(seqDrag.noteId+':'+seqDrag.startStep,seqDrag.currentLength);
+  seqHits.set(seqDrag.noteId+':'+seqDrag.oct+':'+seqDrag.startStep,seqDrag.currentLength);
   seqDrag=null;
   renderSeq();
 });
