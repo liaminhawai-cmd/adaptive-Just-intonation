@@ -87,8 +87,10 @@
   .seqhead .t{color:var(--dim);font-size:12px}
   .seqhead input[type=number]{width:64px;padding:5px 7px}
   .seqbanner{color:var(--acc2);font-size:12px;margin-left:auto}
+  .seqlegend{margin-left:auto;opacity:.75}
   .seqgrid{flex:1;overflow:auto;position:relative}
-  .lane{display:grid;height:24px;border-bottom:1px solid #20242f}
+  .lane{display:grid;grid-auto-rows:24px;height:24px;border-bottom:1px solid #20242f}
+  .lane>*{grid-row:1}
   .lane.src{background:#241f12}
   .lanelbl{display:flex;align-items:center;gap:6px;padding:0 8px;font-size:12px;
        border-right:1px solid var(--line);cursor:context-menu;white-space:nowrap;overflow:hidden}
@@ -188,6 +190,7 @@
       <button id="seqZin" class="ghost" style="width:auto;padding:6px 8px" title="Zoom in">+</button>
       <button id="seqZout" class="ghost" style="width:auto;padding:6px 8px" title="Zoom out">−</button>
       <button id="seqClear" class="ghost">clear</button>
+      <span class="t seqlegend">✏️ click-drag = note + length · right-click bar = delete · right-click lane = tune new pitch from it</span>
       <span class="seqbanner" id="seqBanner"></span>
     </div>
     <div class="seqgrid" id="seqgrid"></div>
@@ -673,9 +676,9 @@ function renderSeq(){
         for(let i=1;i<len;i++)if(s+i<STEPS)covered.add(s+i);
         const dragging=seqDrag&&seqDrag.noteId===n.id&&seqDrag.startStep===s;
         html+=`<div class="noteBar${playing?' play':''}${dragging?' dragging':''}" data-id="${n.id}" data-step="${s}" data-len="${len}"
-          style="grid-column:2/${2+len};background:${consonanceColor(nodeHD(n))}"></div>`;
+          style="grid-column:${2+s}/${2+s+len};background:${consonanceColor(nodeHD(n))}"></div>`;
       }else{
-        html+=`<div class="cell" data-id="${n.id}" data-step="${s}"></div>`;
+        html+=`<div class="cell" data-id="${n.id}" data-step="${s}" style="grid-column:${2+s}"></div>`;
       }
     }
     html+=`</div>`;
