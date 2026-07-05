@@ -177,6 +177,7 @@
     <button class="chip ghost" data-preset="major7">7-note JI major</button>
     <button class="chip ghost" data-preset="penta5">5-note pentatonic</button>
     <button class="chip ghost" data-preset="harm7">7-limit (harmonic 7th)</button>
+    <button class="chip ghost" data-preset="pump" title="I–vi–ii–V–I with every chord tuned pure: the key drifts down 81/80. Press play.">comma pump demo</button>
     <button class="chip ghost" data-preset="clear">clear</button>
   </div>
 
@@ -463,10 +464,13 @@ function renderScene(){
   // apart" — the drift you chose. Show the link and name the exact comma.
   for(let i=0;i<notes.length;i++)for(let j=i+1;j<notes.length;j++){
     const A=notes[i],B=notes[j];
-    const dc=cents(A.ratio)-cents(B.ratio);
-    const adc=Math.abs(dc);
-    if(adc<0.01||adc>=35)continue;
-    let cm=dc>0?div(A.ratio,B.ratio):div(B.ratio,A.ratio); // comma ratio >1
+    let hi=A,lo=B,dc=cents(A.ratio)-cents(B.ratio);
+    if(dc<0){hi=B;lo=A;dc=-dc;}
+    let cm,adc;
+    if(dc<35){adc=dc;cm=div(hi.ratio,lo.ratio);}                       // close in-octave
+    else if(dc>1165){adc=1200-dc;cm=div(mul(lo.ratio,fr(2,1)),hi.ratio);} // wraps the octave
+    else continue;
+    if(adc<0.01)continue;
     const a=pos[A.id],b=pos[B.id];
     const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
     edges+=`<line class="comma" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>
@@ -1149,11 +1153,35 @@ const PRESETS={
   harm7:['1/1','9/8','5/4','11/8','3/2','7/4','15/8'],
 };
 function loadPreset(key){
+  if(key==='pump'){loadPump();return;}
   addRoot();
   if(key!=='clear'&&PRESETS[key]){
     PRESETS[key].forEach((r,i)=>{if(i===0)return;const iv=parseRatio(r);
       notes.push({id:nextId++,ratio:iv,parent:0,interval:iv,name:johnston(iv),salience:0.5,gamut:true});});
   }
+  selected.clear();seqAutoScroll=true;render();fitView();
+}
+// the classic syntonic comma pump: C - Am - Dm - G - C, every chord tuned as
+// pure 5-limit triads from the previous chord's notes. The "C" you come back
+// to is 160/81 - a comma flat. Bar 2 sounds the drifted chord, then the
+// original for comparison; the lattice names each 81/80 with an amber link.
+function loadPump(){
+  addRoot();
+  const add=(n,d,pid,iN,iD)=>{const id=nextId++;
+    notes.push({id,ratio:fr(n,d),parent:pid,interval:fr(iN,iD),name:'',salience:.5,gamut:true});return id;};
+  const E=add(5,4,0,5,4), G=add(3,2,0,3,2), A=add(5,3,0,5,3), F=add(4,3,0,4,3);
+  const D=add(10,9,A,2,3);          // D tuned as a fourth below A - NOT 9/8
+  const Gm=add(40,27,D,4,3);        // G tuned pure from that D - a comma under 3/2
+  const Bm=add(50,27,Gm,5,4), Cm=add(160,81,Gm,4,3), Em=add(100,81,Cm,5,4);
+  BARS=2;document.getElementById('seqBars').value='2';
+  document.getElementById('bpm').value=70;
+  const H=(id,oct,sn,sd,ln,ld)=>hits.push({id,oct,start:fr(sn,sd),len:fr(ln,ld),div:'1/4'});
+  H(0,0,0,1,1,4); H(E,0,0,1,1,4); H(G,0,0,1,1,4);      // C  major
+  H(A,0,1,4,1,4); H(0,1,1,4,1,4); H(E,1,1,4,1,4);      // A  minor
+  H(D,0,1,2,1,4); H(F,0,1,2,1,4); H(A,0,1,2,1,4);      // D- minor
+  H(Gm,0,3,4,1,4);H(Bm,0,3,4,1,4);H(D,1,3,4,1,4);      // G- major
+  H(Cm,0,1,1,1,2);H(Em,0,1,1,1,2);H(Gm,0,1,1,1,2);     // C- major: a comma flat
+  H(0,0,3,2,1,2); H(E,0,3,2,1,2); H(G,0,3,2,1,2);      // original C, for comparison
   selected.clear();seqAutoScroll=true;render();fitView();
 }
 
