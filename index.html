@@ -108,6 +108,10 @@
   .noteBar.sel{opacity:1;box-shadow:inset 0 0 0 2px #fff}
   .noteBar.from{opacity:1;box-shadow:inset 0 0 0 3px #5ee6d8}
   .marquee{position:absolute;border:1px dashed #7aa2ff;background:rgba(122,162,255,.12);z-index:5;pointer-events:none}
+  .relsvg{position:absolute;left:0;top:0;pointer-events:none;z-index:2}
+  .relline{stroke-width:2;opacity:.9}
+  .rellbl2{font-size:10px;font-weight:700;paint-order:stroke;stroke:#0a0c12;stroke-width:3px}
+  .rellbl2.big{font-size:13px}
   .pasteGhost{position:absolute;top:0;background:rgba(255,212,121,.13);border:1px dashed var(--acc2);
        z-index:5;pointer-events:none;display:flex;align-items:flex-start;padding:4px 8px;
        color:var(--acc2);font-size:11px;font-weight:600}
@@ -794,19 +798,36 @@ function rhythmNodeList(){
   return out;
 }
 function divList(){return [...rhythmDivs].map(s=>parseRatio(s)).filter(Boolean);}
-// snap a time (in bars, float) to the nearest multiple of an enabled division;
-// simpler divisions get a wider capture zone, like the pitch snapping.
-function timeSnap(xBars){
+// snap a time (in bars, float) onto the rhythm grid. Candidates are BOTH the
+// global multiples of each enabled division AND every existing note's
+// start/end plus offsets of enabled divisions from those boundaries — rhythm
+// is additive: a note may begin where another ended, even off the main grid,
+// and a triplet run can continue from that boundary. Simpler divisions and
+// exact boundaries get wider capture zones.
+function timeSnap(xBars,excludeHit){
   let best=null,bs=1e9;
-  divList().forEach(dv=>{
+  const consider=(frac,bias,dv)=>{
+    const c=frv(frac);
+    if(c<-1e-9||c>BARS-1e-9)return;
+    const sc=Math.abs(xBars-c)*barW()-bias;
+    if(sc<bs){bs=sc;best={div:dv,start:frac,xBars:c};}
+  };
+  const dvs=divList();
+  dvs.forEach(dv=>{
     const step=dv.n/dv.d;
-    let k=Math.round(xBars/step);
-    if(k<0)k=0;
-    if(k*step>BARS-step*0.5)k=Math.max(0,Math.floor((BARS-1e-9)/step)-0);
-    if(k*step>=BARS)k=Math.max(0,k-1);
     const hd=Math.abs(log2(dv.n*dv.d));
-    const score=Math.abs(xBars-k*step)*barW()-4*Math.max(0,5-hd);
-    if(score<bs){bs=score;best={div:dv,start:fr(k*dv.n,dv.d),xBars:k*step};}
+    const simp=Math.max(0,5-hd);
+    let k=Math.max(0,Math.round(xBars/step));
+    if(k*step>BARS-1e-9)k=Math.max(0,Math.floor((BARS-1e-6)/step));
+    consider(fr(k*dv.n,dv.d),4*simp,dv);
+    hits.forEach(h=>{
+      if(h===excludeHit)return;
+      [h.start,addf(h.start,h.len)].forEach(bf=>{
+        let kk=Math.round((xBars-frv(bf))/step);
+        if(kk<0)kk=0;
+        consider(addf(bf,fr(kk*dv.n,dv.d)),(kk===0?9:2)+2*simp,dv);
+      });
+    });
   });
   return best;
 }
@@ -989,7 +1010,7 @@ function renderSeq(){
     if(i>=0)grid.scrollTop=Math.max(0,i*LANE_H-grid.clientHeight/2+LANE_H*2);
     seqAutoScroll=false;
   }
-  drawPlaceGhost();drawPlayhead();
+  drawPlaceGhost();drawPlayhead();drawRelOverlay();
   scheduleSave();
 }
 
@@ -1231,6 +1252,61 @@ function retuneBlock(list,f){
 function hitAbsRatio(h){
   const n=notes.find(x=>x.id===h.id);if(!n)return fr(1,1);
   return h.oct>=0?mul(n.ratio,fr(Math.pow(2,h.oct),1)):mul(n.ratio,fr(1,Math.pow(2,-h.oct)));
+}
+
+//// relationship lines: while placing/dragging a note, show the exact ratios
+//// to the lowest concurrent note, nearest concurrent above/below, and the
+//// nearest-in-pitch notes just before and after in time. With exactly two
+//// notes ctrl-selected, show the ratio between them.
+function drawRelOverlay(){
+  let svg=grid.querySelector('.relsvg');
+  const pairs=[];
+  if(seqDrag&&seqDrag.hit)relTargets(seqDrag.hit).forEach(t=>pairs.push([seqDrag.hit,t,false]));
+  else if(seqSel.size===2){const[a,b]=[...seqSel];pairs.push([a,b,true]);}
+  if(!pairs.length){if(svg)svg.remove();return;}
+  const rows=laneRows(),bw=barW();
+  const idx=new Map();rows.forEach((r,i)=>idx.set(r.n.id+':'+r.oct,i));
+  const X=h=>118+frv(h.start)*bw+Math.min(frv(h.len)*bw,26)/2;
+  const Y=h=>{const i=idx.get(h.id+':'+h.oct);return i==null?null:i*LANE_H+LANE_H/2;};
+  let s='';
+  pairs.forEach(([a,b,big])=>{
+    const y1=Y(a),y2=Y(b);if(y1==null||y2==null)return;
+    const x1=X(a),x2=X(b);
+    const iv=div(hitAbsRatio(a),hitAbsRatio(b));
+    const red=octReduce(iv);
+    const col=consonanceColor(log2(red.n*red.d));
+    s+=`<line class="relline" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}"/>
+        <text class="rellbl2${big?' big':''}" x="${(x1+x2)/2}" y="${(y1+y2)/2-4}" text-anchor="middle" fill="${col}">${iv.n}/${iv.d}${big?' · '+cents(iv).toFixed(1)+'¢':''}</text>`;
+  });
+  if(!svg){svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('class','relsvg');grid.appendChild(svg);}
+  svg.setAttribute('width',118+BARS*bw);svg.setAttribute('height',rows.length*LANE_H);
+  svg.innerHTML=s;
+}
+function relTargets(h){
+  const s=frv(h.start),e=s+frv(h.len),c=hitAbsCents(h);
+  const out=new Set();
+  const conc=hits.filter(o=>o!==h&&frv(o.start)<e-1e-9&&frv(o.start)+frv(o.len)>s+1e-9);
+  if(conc.length){
+    out.add(conc.reduce((m,o)=>hitAbsCents(o)<hitAbsCents(m)?o:m));           // lowest sounding
+    const above=conc.filter(o=>hitAbsCents(o)>c);
+    const below=conc.filter(o=>hitAbsCents(o)<c);
+    if(above.length)out.add(above.reduce((m,o)=>hitAbsCents(o)<hitAbsCents(m)?o:m));
+    if(below.length)out.add(below.reduce((m,o)=>hitAbsCents(o)>hitAbsCents(m)?o:m));
+  }
+  const pre=hits.filter(o=>o!==h&&frv(o.start)+frv(o.len)<=s+1e-9);
+  if(pre.length){
+    const t=Math.max(...pre.map(o=>frv(o.start)+frv(o.len)));
+    out.add(pre.filter(o=>frv(o.start)+frv(o.len)>t-1e-6)
+      .reduce((m,o)=>Math.abs(hitAbsCents(o)-c)<Math.abs(hitAbsCents(m)-c)?o:m)); // nearest pitch just before
+  }
+  const post=hits.filter(o=>o!==h&&frv(o.start)>=e-1e-9);
+  if(post.length){
+    const t=Math.min(...post.map(o=>frv(o.start)));
+    out.add(post.filter(o=>frv(o.start)<t+1e-6)
+      .reduce((m,o)=>Math.abs(hitAbsCents(o)-c)<Math.abs(hitAbsCents(m)-c)?o:m)); // nearest pitch just after
+  }
+  return [...out];
 }
 
 //// ---- selection, copy & tuned paste ----------------------------------------
@@ -1521,13 +1597,22 @@ grid.addEventListener('mousemove',e=>{
   const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
   const h=seqDrag.hit,sb=frv(h.start);
   let best=null,bs=1e9;
+  const consider=(frac,bias)=>{
+    if(frv(frac)<=sb+1e-9)return;
+    const sc=Math.abs(xBars-frv(frac))*barW()-bias;
+    if(sc<bs){bs=sc;best=frac;}
+  };
   divList().forEach(dv=>{
     const st=dv.n/dv.d;
     const kMin=Math.floor(sb/st+1e-9)+1;               // first gridpoint after the start
     const k=Math.max(kMin,Math.round(xBars/st));
     const hd=Math.abs(log2(dv.n*dv.d));
-    const sc=Math.abs(xBars-k*st)*barW()-4*Math.max(0,5-hd);
-    if(sc<bs){bs=sc;best=fr(k*dv.n,dv.d);}
+    consider(fr(k*dv.n,dv.d),4*Math.max(0,5-hd));
+  });
+  // other notes' boundaries: line an end up with a neighbour's start/end
+  hits.forEach(o=>{
+    if(o===h)return;
+    consider(o.start,8);consider(addf(o.start,o.len),8);
   });
   if(!best)return;
   const newLen=subf(best,h.start);
