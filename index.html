@@ -105,6 +105,17 @@
   .noteBar{position:absolute;top:2px;height:20px;border-radius:4px;cursor:ew-resize;opacity:.85;z-index:2}
   .noteBar.play{opacity:1;box-shadow:0 0 8px rgba(255,212,121,.5)}
   .noteBar.dragging{opacity:1;box-shadow:inset 0 0 0 2px #fff}
+  .noteBar.sel{opacity:1;box-shadow:inset 0 0 0 2px #fff}
+  .noteBar.from{opacity:1;box-shadow:inset 0 0 0 3px #5ee6d8}
+  .marquee{position:absolute;border:1px dashed #7aa2ff;background:rgba(122,162,255,.12);z-index:5;pointer-events:none}
+  .pasteGhost{position:absolute;top:0;background:rgba(255,212,121,.13);border:1px dashed var(--acc2);
+       z-index:5;pointer-events:none;display:flex;align-items:flex-start;padding:4px 8px;
+       color:var(--acc2);font-size:11px;font-weight:600}
+  .tunebox{position:absolute;right:10px;bottom:100%;margin-bottom:8px;background:rgba(20,22,28,.97);
+       border:1px solid var(--acc2);border-radius:10px;z-index:10;padding:10px 12px;
+       display:flex;gap:8px;align-items:center;font-size:12px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  .tunebox input{width:76px;padding:5px 7px}
+  .tunebox button{width:auto;padding:5px 11px}
   /* rhythm map */
   .rpanel{position:absolute;right:10px;bottom:100%;margin-bottom:8px;background:rgba(20,22,28,.97);
        border:1px solid var(--line);border-radius:10px;z-index:9;padding:10px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
@@ -233,7 +244,7 @@
       <button id="seqZin" class="ghost" style="width:auto;padding:6px 8px" title="Zoom in">+</button>
       <button id="seqZout" class="ghost" style="width:auto;padding:6px 8px" title="Zoom out">−</button>
       <button id="seqClear" class="ghost">clear</button>
-      <span class="t seqlegend">✏️ click-drag = note + length (snaps to rhythm map) · right-click bar = delete · right-click lane = tune new pitch</span>
+      <span class="t seqlegend">✏️ click-drag = note · right-click = delete / tune-from · <b>ctrl+click/drag = select</b> · Ctrl+C/V = copy / tuned paste · Del = delete</span>
       <span class="seqbanner" id="seqBanner"></span>
     </div>
     <div class="seqgrid" id="seqgrid"></div>
@@ -750,6 +761,11 @@ let seqView='roll';              // 'roll' | 'score'
 let seqAutoScroll=true;          // scroll middle octave into view on next roll render
 let hits=[];                     // {id, oct, start:frac(bars), len:frac(bars), div:'n/d'}
 let seqDrag=null;                // {hit, div} — live length drag (hit edited in place)
+let seqSel=new Set();            // selected hit refs (ctrl+click / ctrl+marquee)
+let clip=null;                   // copied block: {items:[{id,oct,ds,len,div}], span}
+let pasteMode=null;              // {start:frac} ghost follows mouse until click drops
+let retune=null;                 // {pasted:Set, from:hit|null} — post-paste anchor picking
+let marquee=null;                // {x0,y0,x1,y1} in grid content px
 let seq={playing:false,timer:null,t0:0,barSec:2.4,loopBars:1,events:[],evIdx:0,loopK:0,posBars:-1};
 let place={on:false,src:null,srcOct:0,level:2,cands:[],cur:null,start:null,startDiv:null,acc:0};
 const grid=document.getElementById('seqgrid');
@@ -910,7 +926,9 @@ function renderSeq(){
       if(h.id!==n.id||h.oct!==oct)return;
       const x=118+frv(h.start)*bw,w=Math.max(4,frv(h.len)*bw-2);
       const dragging=seqDrag&&seqDrag.hit===h;
-      html+=`<div class="noteBar${dragging?' dragging':''}" data-i="${i}" data-sb="${frv(h.start)}" data-lb="${frv(h.len)}"
+      const cls=(dragging?' dragging':'')+(seqSel.has(h)?' sel':'')
+        +(retune&&retune.from===h?' from':'');
+      html+=`<div class="noteBar${cls}" data-i="${i}" data-sb="${frv(h.start)}" data-lb="${frv(h.len)}"
         style="left:${x}px;width:${w}px;background:${consonanceColor(nodeHD(n))}" title="${h.start.n}/${h.start.d} bar · length ${h.len.n}/${h.len.d}"></div>`;
     });
     html+=`</div>`;
@@ -920,8 +938,11 @@ function renderSeq(){
   grid.querySelectorAll('.lane').forEach(l=>{
     l.addEventListener('mousedown',e=>{
       if(e.target!==l)return;                    // bars/labels handle their own
+      if(pasteMode){dropPaste();return;}
+      if(retune)return;
       if(place.on){commitPlace();return;}
       e.preventDefault();
+      if(e.ctrlKey||e.metaKey){startMarquee(e);return;}
       const id=+l.dataset.id,oct=+l.dataset.oct;
       const r=grid.getBoundingClientRect();
       const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
@@ -939,14 +960,21 @@ function renderSeq(){
   });
   grid.querySelectorAll('.noteBar').forEach(b=>{
     b.addEventListener('mousedown',e=>{
-      if(place.on){commitPlace();return;}
       e.preventDefault();e.stopPropagation();
       const h=hits[+b.dataset.i];if(!h)return;
+      if(e.ctrlKey||e.metaKey){        // toggle selection
+        if(seqSel.has(h))seqSel.delete(h);else seqSel.add(h);
+        renderSeq();return;
+      }
+      if(retune){retuneClick(h);return;}
+      if(pasteMode){dropPaste();return;}
+      if(place.on){commitPlace();return;}
       seqDrag={hit:h,div:parseRatio(h.div)||divList()[0]};
     });
     b.addEventListener('contextmenu',e=>{
       e.preventDefault();e.stopPropagation();
-      hits.splice(+b.dataset.i,1);renderSeq();
+      const h=hits[+b.dataset.i];
+      seqSel.delete(h);hits.splice(+b.dataset.i,1);renderSeq();
     });
   });
   grid.querySelectorAll('.lanelbl').forEach(l=>{
@@ -1171,19 +1199,9 @@ function pumpDuplicate(){
   if(cents(drift)>600)drift=fr(drift.n,drift.d*2);          // nearest unison, may be <1
   if(need>BARS)setBars(need);
   const plain=eqf(drift,fr(1,1));
-  block.forEach(h=>{
-    const n=notes.find(x=>x.id===h.id);if(!n)return;
-    const pcNew=octReduce(mul(n.ratio,drift));
-    let tn=notes.find(x=>eqf(x.ratio,pcNew));
-    if(!tn){
-      tn={id:nextId++,ratio:pcNew,parent:n.id,interval:drift,name:'',salience:.9,gamut:true};
-      notes.push(tn);
-    }else tn.gamut=true;
-    const total=cents(n.ratio)+1200*h.oct+cents(drift);      // preserve absolute pitch
-    let no=Math.round((total-cents(pcNew))/1200);
-    no=Math.max(OCTS[OCTS.length-1],Math.min(OCTS[0],no));
-    hits.push({id:tn.id,oct:no,start:addf(h.start,fr(blockLen,1)),len:h.len,div:h.div});
-  });
+  const copies=block.map(h=>({id:h.id,oct:h.oct,start:addf(h.start,fr(blockLen,1)),len:h.len,div:h.div}));
+  hits.push(...copies);
+  retuneBlock(copies,drift);
   pumpState.blockStart=bs+blockLen;
   if(seq.playing)seq.loopBars=BARS;                          // let the loop grow live
   banner(plain
@@ -1192,8 +1210,151 @@ function pumpDuplicate(){
   render();
 }
 document.getElementById('pumpBtn').onclick=pumpDuplicate;
+// retune a set of hits (in place) by an exact factor: new pitch classes are
+// created on the lattice (parent = original note, interval = the factor),
+// absolute pitch preserved via octave adjustment
+function retuneBlock(list,f){
+  list.forEach(h=>{
+    const n=notes.find(x=>x.id===h.id);if(!n)return;
+    const pcNew=octReduce(mul(n.ratio,f));
+    let tn=notes.find(x=>eqf(x.ratio,pcNew));
+    if(!tn){
+      tn={id:nextId++,ratio:pcNew,parent:n.id,interval:f,name:'',salience:.9,gamut:true};
+      notes.push(tn);
+    }else tn.gamut=true;
+    const total=cents(n.ratio)+1200*h.oct+cents(f);
+    let no=Math.round((total-cents(pcNew))/1200);
+    no=Math.max(OCTS[OCTS.length-1],Math.min(OCTS[0],no));
+    h.id=tn.id;h.oct=no;
+  });
+}
+function hitAbsRatio(h){
+  const n=notes.find(x=>x.id===h.id);if(!n)return fr(1,1);
+  return h.oct>=0?mul(n.ratio,fr(Math.pow(2,h.oct),1)):mul(n.ratio,fr(1,Math.pow(2,-h.oct)));
+}
+
+//// ---- selection, copy & tuned paste ----------------------------------------
+function startMarquee(e){
+  const r=grid.getBoundingClientRect();
+  const x=e.clientX-r.left+grid.scrollLeft, y=e.clientY-r.top+grid.scrollTop;
+  marquee={x0:x,y0:y,x1:x,y1:y};
+  drawMarquee();
+}
+function drawMarquee(){
+  let m=grid.querySelector('.marquee');
+  if(!marquee){if(m)m.remove();return;}
+  if(!m){m=document.createElement('div');m.className='marquee';grid.appendChild(m);}
+  const x=Math.min(marquee.x0,marquee.x1),y=Math.min(marquee.y0,marquee.y1);
+  m.style.left=x+'px';m.style.top=y+'px';
+  m.style.width=Math.abs(marquee.x1-marquee.x0)+'px';
+  m.style.height=Math.abs(marquee.y1-marquee.y0)+'px';
+}
+function finishMarquee(additive){
+  if(!marquee)return;
+  const x0=Math.min(marquee.x0,marquee.x1),x1=Math.max(marquee.x0,marquee.x1);
+  const y0=Math.min(marquee.y0,marquee.y1),y1=Math.max(marquee.y0,marquee.y1);
+  marquee=null;drawMarquee();
+  if(x1-x0<4&&y1-y0<4)return;                 // treat as a click, not a box
+  const rows=laneRows(),bw=barW();
+  const rowIdx=new Map();rows.forEach((r,i)=>rowIdx.set(r.n.id+':'+r.oct,i));
+  hits.forEach(h=>{
+    const ri=rowIdx.get(h.id+':'+h.oct);if(ri==null)return;
+    const ty=ri*LANE_H,by=ty+LANE_H;
+    const lx=118+frv(h.start)*bw,rx=lx+frv(h.len)*bw;
+    if(rx>=x0&&lx<=x1&&by>=y0&&ty<=y1)seqSel.add(h);
+  });
+  renderSeq();
+}
+function copySel(){
+  if(!seqSel.size){banner('nothing selected — ctrl+click or ctrl+drag to select notes');return;}
+  const items=[...seqSel];
+  let min=items[0].start;
+  items.forEach(h=>{if(frv(h.start)<frv(min))min=h.start;});
+  clip={items:items.map(h=>({id:h.id,oct:h.oct,ds:subf(h.start,min),len:h.len,div:h.div}))};
+  clip.span=Math.max(...clip.items.map(o=>frv(o.ds)+frv(o.len)));
+  banner(`copied ${items.length} note${items.length>1?'s':''} — Ctrl+V to paste (you'll pick the tuning)`);
+}
+function startPaste(){
+  if(!clip){banner('nothing copied yet — select notes and Ctrl+C first');return;}
+  pasteMode={start:fr(0,1)};
+  banner('move to position (snaps to rhythm grid) · click to drop · Esc cancels');
+  drawPasteGhost();
+}
+function drawPasteGhost(){
+  let g=grid.querySelector('.pasteGhost');
+  if(!pasteMode||!clip){if(g)g.remove();return;}
+  if(!g){g=document.createElement('div');g.className='pasteGhost';grid.appendChild(g);}
+  const bw=barW();
+  g.style.left=(118+frv(pasteMode.start)*bw)+'px';
+  g.style.width=Math.max(10,clip.span*bw)+'px';
+  g.style.height=(laneRows().length*LANE_H)+'px';
+  g.textContent=`paste @ ${pasteMode.start.n}/${pasteMode.start.d}`;
+}
+function dropPaste(){
+  if(!pasteMode||!clip)return;
+  const S=pasteMode.start;
+  const need=Math.ceil(frv(S)+clip.span-1e-9);
+  if(need>32){banner('bar limit (32) reached');return;}
+  if(need>BARS)setBars(need);
+  const pasted=clip.items.map(o=>({id:o.id,oct:o.oct,start:addf(S,o.ds),len:o.len,div:o.div}));
+  hits.push(...pasted);
+  pasteMode=null;drawPasteGhost();
+  seqSel=new Set(pasted);
+  retune={pasted:new Set(pasted),from:null};
+  banner('pasted — now RETUNE it: click a pasted note, then the note to tune it from · Esc keeps original tuning');
+  renderSeq();
+}
+function retuneClick(h){
+  if(!retune.from){
+    if(!retune.pasted.has(h)){banner('click a PASTED note first (the one to retune)');return;}
+    retune.from=h;renderSeq();
+    const n=notes.find(x=>x.id===h.id);
+    banner(`retuning ${nameOf(n)}${4+h.oct} — now click the note to tune it FROM`);
+    return;
+  }
+  if(h===retune.from)return;
+  openTuneBox(retune.from,h);
+}
+function openTuneBox(P,A){
+  closeTuneBox();
+  const nP=notes.find(x=>x.id===P.id),nA=notes.find(x=>x.id===A.id);
+  const iv=div(hitAbsRatio(P),hitAbsRatio(A));
+  const cand=snapPick(genCandidates(3),cents(iv));
+  const def=cand?cand.ratio.n+'/'+cand.ratio.d:iv.n+'/'+iv.d;
+  const box=document.createElement('div');
+  box.className='tunebox';box.id='tunebox';
+  box.innerHTML=`<span><b>${nameOf(nP)}${4+P.oct}</b> tuned from <b>${nameOf(nA)}${4+A.oct}</b> by</span>
+    <input id="tuneRatio" value="${def}"/>
+    <button id="tuneApply" class="primary">Apply</button>
+    <button id="tuneCancel" class="ghost">keep as is</button>`;
+  document.getElementById('seq').appendChild(box);
+  const apply=()=>{
+    const r=parseRatio(document.getElementById('tuneRatio').value);
+    if(!r){banner('invalid ratio — use n/d like 5/4');return;}
+    const f=div(mul(hitAbsRatio(A),r),hitAbsRatio(P));
+    const pname=nameOf(nP),aname=nameOf(nA);
+    if(!eqf(f,fr(1,1)))retuneBlock([...retune.pasted],f);
+    retune=null;closeTuneBox();
+    banner(`pasted block retuned so ${pname} sits ${r.n}/${r.d} from ${aname} (shifted ${cents(f)>0?'+':''}${cents(f).toFixed(1)}¢)`);
+    render();
+  };
+  document.getElementById('tuneApply').onclick=apply;
+  document.getElementById('tuneRatio').addEventListener('keydown',e=>{if(e.key==='Enter')apply();});
+  document.getElementById('tuneCancel').onclick=()=>{retune=null;closeTuneBox();banner('kept original tuning');renderSeq();};
+  document.getElementById('tuneRatio').focus();
+  document.getElementById('tuneRatio').select();
+}
+function closeTuneBox(){const b=document.getElementById('tunebox');if(b)b.remove();}
 document.addEventListener('keydown',e=>{
-  if((e.ctrlKey||e.metaKey)&&(e.key==='b'||e.key==='B')){e.preventDefault();pumpDuplicate();}
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  const mod=e.ctrlKey||e.metaKey;
+  if(mod&&(e.key==='b'||e.key==='B')){e.preventDefault();pumpDuplicate();}
+  else if(mod&&(e.key==='c'||e.key==='C')){e.preventDefault();copySel();}
+  else if(mod&&(e.key==='v'||e.key==='V')){e.preventDefault();startPaste();}
+  else if((e.key==='Delete'||e.key==='Backspace')&&seqSel.size){
+    e.preventDefault();
+    hits=hits.filter(h=>!seqSel.has(h));seqSel.clear();renderSeq();
+  }
 });
 
 //// ---- project save/load ----------------------------------------------------
@@ -1342,6 +1503,19 @@ window.addEventListener('mouseup',()=>{seqResize=null;});
 // note-length drag: the note END snaps to any enabled division's gridline
 // (simpler divisions stickier), so every length the rhythm map allows is reachable
 grid.addEventListener('mousemove',e=>{
+  if(marquee){
+    const r=grid.getBoundingClientRect();
+    marquee.x1=e.clientX-r.left+grid.scrollLeft;
+    marquee.y1=e.clientY-r.top+grid.scrollTop;
+    drawMarquee();return;
+  }
+  if(pasteMode){
+    const r=grid.getBoundingClientRect();
+    const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
+    const ts=timeSnap(Math.max(0,xBars));
+    if(ts){pasteMode.start=ts.start;drawPasteGhost();}
+    return;
+  }
   if(!seqDrag)return;
   const r=grid.getBoundingClientRect();
   const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
@@ -1360,10 +1534,20 @@ grid.addEventListener('mousemove',e=>{
   if(newLen.n>0&&!eqf(newLen,h.len)){h.len=newLen;renderSeq();}
 });
 window.addEventListener('mouseup',()=>{
+  if(marquee){finishMarquee();return;}
   if(!seqDrag){return;}
   seqDrag=null;renderSeq();
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(tune.on)endTune(false);if(place.on)cancelPlace();stopAllDrones();}});
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape')return;
+  if(tune.on){endTune(false);return;}
+  if(place.on){cancelPlace();return;}
+  if(pasteMode){pasteMode=null;drawPasteGhost();banner('paste cancelled');return;}
+  if(retune){retune=null;closeTuneBox();banner('kept original tuning');renderSeq();return;}
+  if(marquee){marquee=null;drawMarquee();return;}
+  if(seqSel.size){seqSel.clear();renderSeq();return;}
+  stopAllDrones();
+});
 
 // lattice pan/zoom/tune
 let drag=null;
