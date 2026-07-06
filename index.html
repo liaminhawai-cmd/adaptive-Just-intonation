@@ -134,6 +134,7 @@
   .octn{color:var(--dim);font-weight:400;font-size:10px;margin-left:1px}
   .lane.rootoct .lanelbl{border-left:2px solid #3a4154}
   .x.gm.on{color:var(--acc2)}
+  body:not(.cents) .centcol{display:none}
   .seqgrip{position:absolute;top:-3px;left:0;right:0;height:7px;cursor:ns-resize;z-index:6}
   .seqgrip:hover{background:rgba(122,162,255,.25)}
   .ghostline{position:absolute;left:118px;right:0;height:0;border-top:2px dashed #fff;pointer-events:none;z-index:4}
@@ -152,6 +153,9 @@
     <div><label>Root note</label><input id="rootName" value="C" /></div>
     <div><label>Root freq (Hz)</label><input id="rootFreq" type="number" value="261.63" step="0.01" /></div>
   </div>
+  <label style="display:flex;align-items:center;gap:7px;margin-top:8px;cursor:pointer">
+    <input type="checkbox" id="showCentsChk" style="width:auto"/> show cents (ratios only by default)
+  </label>
 
   <h2>Add a note</h2>
   <p class="hint" style="margin-top:0"><b>Right-click any node</b> (lattice or sequencer), drag up/down to lock onto a just interval, scroll to set the prime limit, click to drop.</p>
@@ -166,7 +170,7 @@
   <div class="preview" id="preview"></div>
 
   <h2>Notes <span class="muted" id="count"></span></h2>
-  <table id="tbl"><thead><tr><th></th><th>Johnston</th><th>ratio</th><th class="r">cents</th><th class="r">Hz</th><th class="r">HD</th><th title="in current key signature (sequencer lanes)">♪</th><th></th></tr></thead><tbody></tbody></table>
+  <table id="tbl"><thead><tr><th></th><th>Johnston</th><th>ratio</th><th class="r centcol">cents</th><th class="r">Hz</th><th class="r">HD</th><th title="in current key signature (sequencer lanes)">♪</th><th></th></tr></thead><tbody></tbody></table>
   <div class="chips">
     <button class="chip ghost" id="gamSel" title="Key signature = only the selected notes get sequencer lanes">key = selected</button>
     <button class="chip ghost" id="gamAll" title="Every pitch class gets sequencer lanes">key = all</button>
@@ -175,7 +179,8 @@
     (each in every octave). Comma-pump freely on the lattice, keep the grid to ~7 notes, re-key as you go.</p>
 
   <h2>MIDI Output <span class="muted">(→ FL Studio)</span></h2>
-  <div class="row"><button id="midiEnable" class="primary">Enable MIDI</button></div>
+  <div class="row"><button id="midiEnable" class="primary">Enable MIDI</button>
+    <button id="midiExport" class="ghost" title="Export the sequence as a .mid file: notes round-robin across channels with pitch bends carrying the exact tuning">Export .mid</button></div>
   <label>Output device</label>
   <select id="midiOut"></select>
   <label>Mode</label>
@@ -243,12 +248,13 @@
       <button id="rhythmBtn" class="ghost" title="Rhythm map: choose the divisions notes snap to">𝅘𝅥𝅮 Rhythm</button>
       <span class="t" id="rchips" title="active snap divisions — click one to remove"></span>
       <button id="pumpBtn" class="ghost" title="Duplicate the loop after itself, retuned to where the progression landed (Ctrl+B). Press again to keep spiralling.">⤵ Pump</button>
+      <button id="selBtn" class="ghost" title="Box-select mode: drag a rectangle to select notes (or hold shift/ctrl anytime)">⬚ Select</button>
       <span class="t">BPM</span><input id="bpm" type="number" value="100" min="20" max="300" step="1"/>
       <span class="t">bars</span><select id="seqBars"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select>
       <button id="seqZin" class="ghost" style="width:auto;padding:6px 8px" title="Zoom in">+</button>
       <button id="seqZout" class="ghost" style="width:auto;padding:6px 8px" title="Zoom out">−</button>
       <button id="seqClear" class="ghost">clear</button>
-      <span class="t seqlegend">✏️ click-drag = note · right-click = delete / tune-from · <b>ctrl+click/drag = select</b> · Ctrl+C/V = copy / tuned paste · Del = delete</span>
+      <span class="t seqlegend">✏️ click-drag = note · right-click = delete / tune-from · <b>shift/ctrl+click or drag = select</b> · Ctrl+C/V = copy / tuned paste · Del = delete</span>
       <span class="seqbanner" id="seqBanner"></span>
     </div>
     <div class="seqgrid" id="seqgrid"></div>
@@ -272,6 +278,10 @@ function parseRatio(s){
 }
 const log2=x=>Math.log(x)/Math.log(2);
 const cents=f=>1200*log2(f.n/f.d);
+// cents are opt-in: ratios are the language here, cents only if asked for
+let showCents=false;
+try{showCents=JSON.parse(localStorage.getItem('lattice-ui')||'{}').showCents||false;}catch(e){}
+const CENTS=(v,pre=' · ')=>showCents?pre+(v>0?'':'')+v.toFixed(1)+'¢':'';
 function octReduce(f){let n=f.n,d=f.d;while(n/d>=2)d*=2;while(n/d<1)n*=2;return fr(n,d);}
 
 //// ---- consonance: Tenney harmonic distance -------------------------------
@@ -429,7 +439,7 @@ function renderTable(){
     tr.innerHTML=`<td><span class="swatch" style="background:${consonanceColor(nodeHD(n))}"></span></td>
       <td>${nameOf(n)}${n.id===0?' <span class="muted">(root)</span>':''}</td>
       <td class="r">${n.ratio.n}/${n.ratio.d}</td>
-      <td class="r">${cents(n.ratio).toFixed(1)}</td>
+      <td class="r centcol">${cents(n.ratio).toFixed(1)}</td>
       <td class="r">${noteFreq(n.ratio).toFixed(2)}</td>
       <td class="r">${log2(n.ratio.n*n.ratio.d).toFixed(2)}</td>
       <td><button class="x gm${inGam?' on':''}" title="toggle sequencer lanes (key signature)">${inGam?'♪':'·'}</button></td>
@@ -465,9 +475,9 @@ function renderPreview(){
   notes.forEach(n=>{const d=Math.abs(cents(octReduce(n.ratio))-rc);if(d<best){best=d;coll=n;}});
   let cstr='';
   if(coll&&best<60&&best>0.5)
-    cstr=`<br><span class="muted">≈ your ${nameOf(coll)} (${coll.ratio.n}/${coll.ratio.d}), but ${best.toFixed(1)}¢ apart — a different one.</span>`;
+    cstr=`<br><span class="muted">≈ your ${nameOf(coll)} (${coll.ratio.n}/${coll.ratio.d})${showCents?', but '+best.toFixed(1)+'¢ apart':''} — a different one.</span>`;
   pv.innerHTML=`New note: <b>${johnston(res)}</b> · ratio <b>${res.n}/${res.d}</b> ·
-    ${cents(res).toFixed(1)}¢ · ${noteFreq(res).toFixed(2)} Hz · HD <b>${log2(res.n*res.d).toFixed(2)}</b>${cstr}`;
+    ${showCents?cents(res).toFixed(1)+'¢ · ':''}${noteFreq(res).toFixed(2)} Hz · HD <b>${log2(res.n*res.d).toFixed(2)}</b>${cstr}`;
 }
 
 //// ---- lattice scene ------------------------------------------------------
@@ -495,7 +505,7 @@ function renderScene(){
     const a=pos[A.id],b=pos[B.id];
     const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
     edges+=`<line class="comma" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>
-      <text class="commalbl" x="${mx}" y="${my-5}" text-anchor="middle">${cm.n}/${cm.d} · ${adc.toFixed(1)}¢</text>`;
+      <text class="commalbl" x="${mx}" y="${my-5}" text-anchor="middle">${cm.n}/${cm.d}${CENTS(adc)}</text>`;
   }
   let nodes='';
   notes.forEach(n=>{const p=pos[n.id];
@@ -963,7 +973,7 @@ function renderSeq(){
       if(retune)return;
       if(place.on){commitPlace();return;}
       e.preventDefault();
-      if(e.ctrlKey||e.metaKey){startMarquee(e);return;}
+      if(selMode||e.shiftKey||e.ctrlKey||e.metaKey){startMarquee(e);return;}
       const id=+l.dataset.id,oct=+l.dataset.oct;
       const r=grid.getBoundingClientRect();
       const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
@@ -983,7 +993,7 @@ function renderSeq(){
     b.addEventListener('mousedown',e=>{
       e.preventDefault();e.stopPropagation();
       const h=hits[+b.dataset.i];if(!h)return;
-      if(e.ctrlKey||e.metaKey){        // toggle selection
+      if(selMode||e.shiftKey||e.ctrlKey||e.metaKey){   // toggle selection
         if(seqSel.has(h))seqSel.delete(h);else seqSel.add(h);
         renderSeq();return;
       }
@@ -1227,10 +1237,62 @@ function pumpDuplicate(){
   if(seq.playing)seq.loopBars=BARS;                          // let the loop grow live
   banner(plain
     ?'pumped · no drift detected (first & last chords share a root) — plain duplicate'
-    :`pumped · copy retuned by ${drift.n}/${drift.d} (${cents(drift)>0?'+':''}${cents(drift).toFixed(1)}¢) — Ctrl+B again to keep spiralling`);
+    :`pumped · copy retuned by ${drift.n}/${drift.d}${showCents?' ('+(cents(drift)>0?'+':'')+cents(drift).toFixed(1)+'¢)':''} — Ctrl+B again to keep spiralling`);
   render();
 }
 document.getElementById('pumpBtn').onclick=pumpDuplicate;
+let selMode=false;
+document.getElementById('selBtn').onclick=function(){
+  selMode=!selMode;
+  this.classList.toggle('tgl',selMode);
+  grid.style.cursor=selMode?'crosshair':'';
+  banner(selMode?'box-select: drag a rectangle (shift = add to selection) · Esc exits':'');
+};
+document.getElementById('showCentsChk').checked=showCents;
+document.body.classList.toggle('cents',showCents);
+document.getElementById('showCentsChk').addEventListener('change',e=>{
+  showCents=e.target.checked;
+  document.body.classList.toggle('cents',showCents);
+  try{localStorage.setItem('lattice-ui',JSON.stringify({showCents}));}catch(err){}
+  render();
+});
+//// ---- MIDI file export ------------------------------------------------------
+function exportMidi(){
+  if(!hits.length){banner('nothing to export — sketch something first');return;}
+  const PPQ=480,ticksPerBar=PPQ*4;
+  const bpm=parseFloat(document.getElementById('bpm').value)||100;
+  const range=midiRange();
+  const evs=[];let rot=0;
+  hits.forEach(h=>{
+    const n=notes.find(x=>x.id===h.id);if(!n)return;
+    const m=hzToMidiFloat(laneFreq(n,h.oct));
+    const base=Math.max(0,Math.min(127,Math.round(m)));
+    const bend=Math.max(-1,Math.min(1,(m-base)/range));
+    const bv=Math.max(0,Math.min(16383,Math.round(8192+bend*8191)));
+    let c=rot++%15;if(c>=9)c++;                       // round-robin, skip ch10 (GM drums)
+    const t0=Math.round(frv(h.start)*ticksPerBar);
+    const t1=Math.max(t0+10,Math.round((frv(h.start)+frv(h.len))*ticksPerBar));
+    evs.push({t:t0,o:0,b:[0xE0|c,bv&0x7f,(bv>>7)&0x7f]});
+    evs.push({t:t0,o:1,b:[0x90|c,base,100]});
+    evs.push({t:t1,o:2,b:[0x80|c,base,0]});
+  });
+  evs.sort((a,b)=>a.t-b.t||a.o-b.o);
+  const vlen=v=>{const out=[v&0x7f];while(v>>=7)out.unshift(0x80|(v&0x7f));return out;};
+  const us=Math.round(60000000/bpm);
+  let tr=[0x00,0xFF,0x51,0x03,(us>>16)&255,(us>>8)&255,us&255];
+  let last=0;
+  evs.forEach(e=>{tr.push(...vlen(e.t-last));last=e.t;tr.push(...e.b);});
+  tr.push(0x00,0xFF,0x2F,0x00);
+  const u32=v=>[(v>>24)&255,(v>>16)&255,(v>>8)&255,v&255];
+  const u16=v=>[(v>>8)&255,v&255];
+  const file=new Uint8Array([77,84,104,100,...u32(6),...u16(0),...u16(1),...u16(PPQ),
+                             77,84,114,107,...u32(tr.length),...tr]);
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([file],{type:'audio/midi'}));
+  a.download='lattice.mid';a.click();URL.revokeObjectURL(a.href);
+  banner(`exported ${hits.length} notes as .mid — pitch bends carry the tuning; set your synth's bend range to ${range} semitones`);
+}
+document.getElementById('midiExport').onclick=exportMidi;
 // retune a set of hits (in place) by an exact factor: new pitch classes are
 // created on the lattice (parent = original note, interval = the factor),
 // absolute pitch preserved via octave adjustment
@@ -1276,7 +1338,7 @@ function drawRelOverlay(){
     const red=octReduce(iv);
     const col=consonanceColor(log2(red.n*red.d));
     s+=`<line class="relline" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}"/>
-        <text class="rellbl2${big?' big':''}" x="${(x1+x2)/2}" y="${(y1+y2)/2-4}" text-anchor="middle" fill="${col}">${iv.n}/${iv.d}${big?' · '+cents(iv).toFixed(1)+'¢':''}</text>`;
+        <text class="rellbl2${big?' big':''}" x="${(x1+x2)/2}" y="${(y1+y2)/2-4}" text-anchor="middle" fill="${col}">${iv.n}/${iv.d}${big&&showCents?' · '+cents(iv).toFixed(1)+'¢':''}</text>`;
   });
   if(!svg){svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
     svg.setAttribute('class','relsvg');grid.appendChild(svg);}
@@ -1313,7 +1375,7 @@ function relTargets(h){
 function startMarquee(e){
   const r=grid.getBoundingClientRect();
   const x=e.clientX-r.left+grid.scrollLeft, y=e.clientY-r.top+grid.scrollTop;
-  marquee={x0:x,y0:y,x1:x,y1:y};
+  marquee={x0:x,y0:y,x1:x,y1:y,add:e.shiftKey||e.ctrlKey||e.metaKey};
   drawMarquee();
 }
 function drawMarquee(){
@@ -1325,12 +1387,14 @@ function drawMarquee(){
   m.style.width=Math.abs(marquee.x1-marquee.x0)+'px';
   m.style.height=Math.abs(marquee.y1-marquee.y0)+'px';
 }
-function finishMarquee(additive){
+function finishMarquee(){
   if(!marquee)return;
+  const add=marquee.add;
   const x0=Math.min(marquee.x0,marquee.x1),x1=Math.max(marquee.x0,marquee.x1);
   const y0=Math.min(marquee.y0,marquee.y1),y1=Math.max(marquee.y0,marquee.y1);
   marquee=null;drawMarquee();
   if(x1-x0<4&&y1-y0<4)return;                 // treat as a click, not a box
+  if(!add)seqSel.clear();
   const rows=laneRows(),bw=barW();
   const rowIdx=new Map();rows.forEach((r,i)=>rowIdx.set(r.n.id+':'+r.oct,i));
   hits.forEach(h=>{
@@ -1411,7 +1475,7 @@ function openTuneBox(P,A){
     const pname=nameOf(nP),aname=nameOf(nA);
     if(!eqf(f,fr(1,1)))retuneBlock([...retune.pasted],f);
     retune=null;closeTuneBox();
-    banner(`pasted block retuned so ${pname} sits ${r.n}/${r.d} from ${aname} (shifted ${cents(f)>0?'+':''}${cents(f).toFixed(1)}¢)`);
+    banner(`pasted block retuned so ${pname} sits ${r.n}/${r.d} from ${aname}${showCents?' (shifted '+(cents(f)>0?'+':'')+cents(f).toFixed(1)+'¢)':''}`);
     render();
   };
   document.getElementById('tuneApply').onclick=apply;
@@ -1630,6 +1694,7 @@ document.addEventListener('keydown',e=>{
   if(pasteMode){pasteMode=null;drawPasteGhost();banner('paste cancelled');return;}
   if(retune){retune=null;closeTuneBox();banner('kept original tuning');renderSeq();return;}
   if(marquee){marquee=null;drawMarquee();return;}
+  if(selMode){selMode=false;document.getElementById('selBtn').classList.remove('tgl');grid.style.cursor='';return;}
   if(seqSel.size){seqSel.clear();renderSeq();return;}
   stopAllDrones();
 });
