@@ -81,6 +81,20 @@
        padding:7px 14px;font-size:12px;color:var(--txt);display:none;z-index:5}
   .limitbox.on{display:block}
   .limitbox b{color:var(--acc2)}
+  /* modal (MIDI import negotiation) */
+  .modalbg{position:fixed;inset:0;background:rgba(6,7,10,.7);z-index:50;display:flex;
+       align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;
+       width:560px;max-width:92vw;max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  .modal h3{margin:0 0 4px;font-size:16px}
+  .modal .sub{margin:0 0 14px}
+  .sysbtn{display:block;width:100%;text-align:left;margin:6px 0;padding:10px 12px;border-radius:9px}
+  .sysbtn.on{border-color:var(--acc2);background:#241f12}
+  .sysbtn b{color:var(--acc2)}
+  .scalerow{font-variant-numeric:tabular-nums;font-size:11px;color:var(--dim);margin-top:5px;line-height:1.6}
+  .scalerow span{display:inline-block;min-width:52px}
+  .modalfoot{display:flex;gap:8px;margin-top:16px}
+  .modalfoot button{flex:1}
   /* sequencer */
   #seq{height:236px;border-top:1px solid var(--line);background:var(--panel);
        display:flex;flex-direction:column;position:relative}
@@ -181,6 +195,8 @@
   <h2>MIDI Output <span class="muted">(→ FL Studio)</span></h2>
   <div class="row"><button id="midiEnable" class="primary">Enable MIDI</button>
     <button id="midiExport" class="ghost" title="Export the sequence as a .mid file: notes round-robin across channels with pitch bends carrying the exact tuning">Export .mid</button></div>
+  <div class="row"><button id="midiImport" class="ghost" title="Import a 12-tone MIDI file and project it into a JI tuning of your choice">Import .mid</button></div>
+  <input type="file" id="midiFile" accept=".mid,.midi,audio/midi" style="display:none">
   <label>Output device</label>
   <select id="midiOut"></select>
   <label>Mode</label>
@@ -1495,6 +1511,159 @@ document.addEventListener('keydown',e=>{
     e.preventDefault();
     hits=hits.filter(h=>!seqSel.has(h));seqSel.clear();renderSeq();
   }
+});
+
+//// ---- MIDI file import + 12-tone→JI projection ------------------------------
+// Standard MIDI File parser (format 0/1). Returns notes with absolute ticks.
+function parseMidi(bytes){
+  let p=0;
+  const rstr=n=>{let s='';for(let i=0;i<n;i++)s+=String.fromCharCode(bytes[p++]);return s;};
+  const rd16=()=>{const v=(bytes[p]<<8)|bytes[p+1];p+=2;return v;};
+  const rd32=()=>{const v=(bytes[p]*0x1000000)+((bytes[p+1]<<16)|(bytes[p+2]<<8)|bytes[p+3]);p+=4;return v;};
+  const vlq=()=>{let v=0,c;do{c=bytes[p++];v=(v<<7)|(c&0x7f);}while(c&0x80);return v;};
+  if(rstr(4)!=='MThd')throw new Error('not a MIDI file');
+  rd32(); rd16(); const ntrks=rd16(); const div=rd16();
+  const ppq=(div&0x8000)?480:div;
+  let tempo=500000;                          // µs per quarter (120 BPM)
+  const out=[];
+  for(let t=0;t<ntrks;t++){
+    if(rstr(4)!=='MTrk')break;
+    const len=rd32(),end=p+len;
+    let tick=0,status=0;const active={};
+    while(p<end){
+      tick+=vlq();
+      let b=bytes[p];
+      if(b&0x80){status=b;p++;}
+      const cmd=status&0xf0,ch=status&0x0f;
+      if(status===0xff){const type=bytes[p++];const l=vlq();
+        if(type===0x51)tempo=(bytes[p]<<16)|(bytes[p+1]<<8)|bytes[p+2];
+        p+=l;}
+      else if(status===0xf0||status===0xf7){const l=vlq();p+=l;}
+      else if(cmd===0x90){const note=bytes[p++],vel=bytes[p++];
+        if(vel>0)active[note+':'+ch]={tick};
+        else{const a=active[note+':'+ch];if(a){out.push({note,start:a.tick,dur:tick-a.tick});delete active[note+':'+ch];}}}
+      else if(cmd===0x80){const note=bytes[p++];p++;const a=active[note+':'+ch];
+        if(a){out.push({note,start:a.tick,dur:tick-a.tick});delete active[note+':'+ch];}}
+      else if(cmd===0xc0||cmd===0xd0){p++;}
+      else{p+=2;}
+    }
+    p=end;
+  }
+  return {ppq,tempo,notes:out};
+}
+
+// 12-tone projection scales (each pitch class → an octave-reduced ratio).
+const TUNING_SYS={};
+function buildTuningSystems(){
+  // minimum dissonance: per chromatic slot, the ratio with lowest Tenney HD
+  // within ±55¢ of the equal-tempered position (candidates up to the 7-limit).
+  const cands=[];const seen=new Set();
+  for(let n=1;n<=64;n++)for(let d=1;d<=64;d++){
+    const f=octReduce(fr(n,d));const k=f.n+'/'+f.d;if(seen.has(k))continue;seen.add(k);
+    const e=exps(f);if(Object.keys(e).some(pr=>+pr>7))continue;
+    cands.push(f);
+  }
+  const minD=[fr(1,1)];
+  for(let s=1;s<12;s++){const tgt=s*100;let best=fr(1,1),bh=1e9;
+    cands.forEach(f=>{const c=cents(f);if(Math.abs(c-tgt)>55)return;
+      const hd=log2(f.n*f.d);if(hd<bh){bh=hd;best=f;}});minD.push(best);}
+  TUNING_SYS.min={name:'Minimum dissonance (7-limit)',
+    desc:'Each degree is the most consonant ratio near its slot — the least-beating 12-tone set.',
+    scale:minD};
+  TUNING_SYS.just5={name:'5-limit chromatic (close to 12-TET)',
+    desc:'The classic just chromatic scale: sensible 5-limit ratios, all within ~18¢ of 12-TET.',
+    scale:['1/1','16/15','9/8','6/5','5/4','4/3','45/32','3/2','8/5','5/3','9/5','15/8'].map(parseRatio)};
+  TUNING_SYS.pyth={name:'Pythagorean (3-limit)',
+    desc:'A pure chain of fifths — melodically close to 12-TET, but with large numbers.',
+    scale:['1/1','256/243','9/8','32/27','81/64','4/3','729/512','3/2','128/81','27/16','16/9','243/128'].map(parseRatio)};
+}
+buildTuningSystems();
+const PCNAMES=['C','C♯','D','E♭','E','F','F♯','G','A♭','A','B♭','B'];
+
+let midiPending=null,midiChoice={tonic:0,sys:'min'};
+function openMidiModal(parsed){
+  midiPending=parsed;
+  // guess tonic = most frequent pitch class
+  const freq=new Array(12).fill(0);parsed.notes.forEach(n=>freq[((n.note%12)+12)%12]++);
+  midiChoice.tonic=freq.indexOf(Math.max(...freq));if(midiChoice.tonic<0)midiChoice.tonic=0;
+  midiChoice.sys='min';
+  const bg=document.createElement('div');bg.className='modalbg';bg.id='midiModal';
+  bg.innerHTML=`<div class="modal">
+    <h3>Import MIDI — project into a JI tuning</h3>
+    <p class="sub">This file is 12-tone. Choose which pitch class becomes <b>1/1</b> and which
+      just-intonation scale to project its 12 slots into. Every imported note becomes an exact ratio you can then re-tune on the lattice.</p>
+    <label>Tonic (which pitch class = 1/1)</label>
+    <select id="mTonic"></select>
+    <label style="margin-top:12px">Tuning system</label>
+    <div id="mSys"></div>
+    <div class="modalfoot">
+      <button id="mCancel" class="ghost">Cancel</button>
+      <button id="mGo" class="primary">Import ${parsed.notes.length} notes</button>
+    </div></div>`;
+  document.body.appendChild(bg);
+  const ts=bg.querySelector('#mTonic');
+  PCNAMES.forEach((nm,i)=>{const o=document.createElement('option');o.value=i;o.textContent=nm;ts.appendChild(o);});
+  ts.value=midiChoice.tonic;
+  ts.onchange=e=>{midiChoice.tonic=+e.target.value;paintSys();};
+  function paintSys(){
+    const box=bg.querySelector('#mSys');box.innerHTML='';
+    Object.entries(TUNING_SYS).forEach(([k,sys])=>{
+      const b=document.createElement('button');
+      b.className='sysbtn ghost'+(midiChoice.sys===k?' on':'');
+      const rows=sys.scale.map((f,i)=>{
+        const dev=cents(f)-i*100;
+        return `<span>${PCNAMES[(midiChoice.tonic+i)%12]} ${f.n}/${f.d}</span>`;
+      }).join('');
+      b.innerHTML=`<b>${sys.name}</b><div class="hint" style="margin:2px 0 0">${sys.desc}</div>
+        <div class="scalerow">${rows}</div>`;
+      b.onclick=()=>{midiChoice.sys=k;paintSys();};
+      box.appendChild(b);
+    });
+  }
+  paintSys();
+  bg.querySelector('#mCancel').onclick=()=>{bg.remove();midiPending=null;};
+  bg.querySelector('#mGo').onclick=()=>{bg.remove();projectMidi();};
+  bg.addEventListener('mousedown',e=>{if(e.target===bg){bg.remove();midiPending=null;}});
+}
+function projectMidi(){
+  const parsed=midiPending;if(!parsed)return;
+  const scale=TUNING_SYS[midiChoice.sys].scale.map(x=>x.n?x:parseRatio(x));
+  addRoot();
+  const tonicMidi=60+midiChoice.tonic;
+  const tpb=parsed.ppq*4;                     // ticks per bar (4/4)
+  const pcNote={};let maxEnd=0,clamped=0;
+  parsed.notes.forEach(ev=>{
+    if(ev.dur<=0)return;
+    const rel=ev.note-tonicMidi;
+    const pc=((rel%12)+12)%12;
+    let oct=Math.round((rel-pc)/12);
+    if(oct<-2||oct>2)clamped++;
+    oct=Math.max(-2,Math.min(2,oct));
+    const ratio=scale[pc];
+    let id=pcNote[pc];
+    if(id==null){
+      if(eqf(ratio,fr(1,1)))id=0;
+      else{id=nextId++;notes.push({id,ratio,parent:0,interval:ratio,name:'',salience:.5,gamut:true});}
+      pcNote[pc]=id;
+    }
+    const start=fr(ev.start,tpb),len=fr(ev.dur,tpb);
+    hits.push({id,oct,start,len,div:len.n+'/'+len.d});
+    maxEnd=Math.max(maxEnd,ev.start+ev.dur);
+  });
+  setBars(Math.max(1,Math.min(64,Math.ceil(maxEnd/tpb-1e-9))));
+  document.getElementById('bpm').value=Math.round(60000000/parsed.tempo);
+  midiPending=null;selected.clear();seqAutoScroll=true;render();fitView();
+  banner(`imported ${hits.length} notes in ${TUNING_SYS[midiChoice.sys].name}`
+    +(clamped?` · ${clamped} notes folded into the ±2-octave range`:''));
+}
+document.getElementById('midiImport').onclick=()=>document.getElementById('midiFile').click();
+document.getElementById('midiFile').addEventListener('change',e=>{
+  const f=e.target.files[0];if(!f)return;
+  f.arrayBuffer().then(buf=>{
+    try{openMidiModal(parseMidi(new Uint8Array(buf)));}
+    catch(err){banner('could not read that MIDI file');}
+  });
+  e.target.value='';
 });
 
 //// ---- project save/load ----------------------------------------------------

@@ -162,6 +162,23 @@ There are two **modes**:
 Caveats: Mono mode is monophonic-correct only — for true polyphonic microtonal chords you need a
 real MPE synth (MPE mode) or the MTS-ESP path below. Fine for melodic sketching as-is.
 
+**Export .mid** writes a standard MIDI file: exact-fraction timing at 480 PPQ, tempo embedded,
+each note preceded by a pitch bend carrying its tuning (notes round-robin across channels). Set
+the receiving synth's bend range to match this app's field.
+
+**Import .mid** goes the other way, and since incoming MIDI is 12-tone it *negotiates*: a dialog
+asks which pitch class becomes 1/1 (auto-guessed from the file) and which JI scale to project the
+12 chromatic slots into. Presets:
+
+- **Minimum dissonance (7-limit)** — each of the 12 slots is filled with the most consonant ratio
+  near its equal-tempered position, giving the least-beating 12-tone set.
+- **5-limit chromatic (close to 12-TET)** — the classic just chromatic scale, sensible ratios all
+  within ~18¢ of equal temperament.
+- **Pythagorean (3-limit)** — a pure chain of fifths (large numbers, melodically near 12-TET).
+
+Every imported note lands as an exact ratio on the lattice, so you can then re-tune, comma-pump,
+and drone against it like anything else.
+
 ## Roadmap — a cleaner path later
 
 1. **MTS-ESP master** — the tidy alternative to per-channel MPE bending. ODDSound open-sourced the
