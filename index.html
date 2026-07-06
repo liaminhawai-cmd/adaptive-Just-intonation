@@ -105,8 +105,10 @@
   .seqhead input[type=number]{width:64px;padding:5px 7px}
   .seqbanner{color:var(--acc2);font-size:12px;margin-left:auto}
   .seqlegend{margin-left:auto;opacity:.75}
-  .rchip{padding:2px 7px;font-size:11px;width:auto;margin-left:3px}
-  .rchip:hover{border-color:#ff7a7a;color:#ff7a7a}
+  .rchip{padding:2px 7px;font-size:11px;width:auto;margin-left:3px;opacity:.38}
+  .rchip.on{opacity:1;color:var(--acc2);border-color:#3a4154}
+  .rchip.cur{box-shadow:inset 0 0 0 1.5px var(--acc2)}
+  .rchip:hover{opacity:1}
   .seqgrid{flex:1;overflow:auto;position:relative}
   .lane{position:relative;height:24px;border-bottom:1px solid #20242f}
   .lane.src{background:#241f12}
@@ -802,6 +804,7 @@ let retune=null;                 // {pasted:Set, from:hit|null} — post-paste a
 let marquee=null;                // {x0,y0,x1,y1} in grid content px
 let seq={playing:false,timer:null,t0:0,barSec:2.4,loopBars:1,events:[],evIdx:0,loopK:0,posBars:-1};
 let place={on:false,src:null,srcOct:0,level:2,cands:[],cur:null,start:null,startDiv:null,acc:0};
+let curDur=fr(1,4);              // current note value: new notes inherit this
 const grid=document.getElementById('seqgrid');
 const seqBanner=document.getElementById('seqBanner');
 const barW=()=>288*seqZoom;      // px per bar
@@ -873,17 +876,40 @@ function gridBg(){
   });
   return layers.join(',');
 }
+// the always-visible snap palette: common unit-fraction divisions, expanding
+// with the enabled primes; active ones lit, the rest greyed (not hidden).
+function paletteDivs(){
+  const set=new Map();const add=f=>set.set(f.n+'/'+f.d,f);
+  [1,2,4,8,16,32].forEach(d=>add(fr(1,d)));
+  if(rhythmPrimes[3])[3,6,12,24].forEach(d=>add(fr(1,d)));
+  if(rhythmPrimes[5])[5,10,20].forEach(d=>add(fr(1,d)));
+  if(rhythmPrimes[7])[7,14].forEach(d=>add(fr(1,d)));
+  rhythmDivs.forEach(k=>{const f=parseRatio(k);if(f)add(f);}); // never hide an active one
+  return [...set.values()].sort((a,b)=>b.n/b.d-a.n/a.d);
+}
+// resolve a desired note value against the enabled divisions: keep it if some
+// enabled division tiles it evenly, else snap to the closest enabled length.
+function resolveDur(d){
+  const dv=divList();if(!dv.length)return d;
+  const ok=dv.some(x=>{const q=frv(d)/frv(x);return Math.abs(q-Math.round(q))<1e-6&&Math.round(q)>=1;});
+  if(ok)return d;
+  let best=dv[0],bs=1e9;
+  dv.forEach(x=>{const diff=Math.abs(frv(d)-frv(x));if(diff<bs){bs=diff;best=x;}});
+  return best;
+}
 function renderRChips(){
   const el=document.getElementById('rchips');if(!el)return;
-  el.innerHTML='<span style="opacity:.6">snap:</span> ';
-  [...rhythmDivs].map(s=>parseRatio(s)).filter(Boolean)
-    .sort((a,b)=>b.n/b.d-a.n/a.d).forEach(f=>{
+  el.innerHTML='<span style="opacity:.6">snap</span> ';
+  paletteDivs().forEach(f=>{
+    const key=f.n+'/'+f.d,on=rhythmDivs.has(key);
     const b=document.createElement('button');
-    b.className='chip ghost rchip';b.textContent=f.n+'/'+f.d;
+    b.className='chip ghost rchip'+(on?' on':'')+(eqf(f,curDur)?' cur':'');
+    b.textContent=key;b.title=eqf(f,curDur)?'current note value':(on?'enabled — click to disable':'disabled — click to enable');
     b.onclick=()=>{
-      if(rhythmDivs.size>1)rhythmDivs.delete(f.n+'/'+f.d);
+      if(on){if(rhythmDivs.size>1)rhythmDivs.delete(key);}
+      else rhythmDivs.add(key);
       renderRChips();renderSeq();
-      if(document.getElementById('rpanel').style.display!=='none')renderRhythm();
+      if(document.getElementById('rpanel').style.display!=='none'){renderRhythm();}
     };
     el.appendChild(b);
   });
@@ -998,9 +1024,10 @@ function renderSeq(){
       const r=grid.getBoundingClientRect();
       const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
       const ts=timeSnap(xBars);if(!ts)return;
-      const h={id,oct,start:ts.start,len:fr(ts.div.n,ts.div.d),div:ts.div.n+'/'+ts.div.d};
+      const len=resolveDur(curDur);                 // new notes inherit the current value
+      const h={id,oct,start:ts.start,len,div:ts.div.n+'/'+ts.div.d};
       hits.push(h);
-      seqDrag={hit:h,div:ts.div};
+      seqDrag={hit:h,mode:'len',div:ts.div};
       playLane(notes.find(n=>n.id===id),oct);
       renderSeq();
     });
@@ -1013,6 +1040,7 @@ function renderSeq(){
     b.addEventListener('mousedown',e=>{
       e.preventDefault();e.stopPropagation();
       const h=hits[+b.dataset.i];if(!h)return;
+      curDur=h.len;renderRChips();                    // touched note sets the current value
       if(selMode||e.shiftKey||e.ctrlKey||e.metaKey){   // toggle selection
         if(seqSel.has(h))seqSel.delete(h);else seqSel.add(h);
         renderSeq();return;
@@ -1910,9 +1938,10 @@ grid.addEventListener('mousemove',e=>{
 window.addEventListener('mouseup',()=>{
   if(marquee){finishMarquee();return;}
   if(!seqDrag){return;}
+  curDur=seqDrag.hit.len;                    // last-edited length becomes current
   seqDrag=null;
   grid.querySelectorAll('.movingghost').forEach(e=>e.remove());
-  renderSeq();
+  renderSeq();renderRChips();
 });
 document.addEventListener('keydown',e=>{
   if(e.key!=='Escape')return;
