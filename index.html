@@ -91,6 +91,8 @@
   .seqhead input[type=number]{width:64px;padding:5px 7px}
   .seqbanner{color:var(--acc2);font-size:12px;margin-left:auto}
   .seqlegend{margin-left:auto;opacity:.75}
+  .rchip{padding:2px 7px;font-size:11px;width:auto;margin-left:3px}
+  .rchip:hover{border-color:#ff7a7a;color:#ff7a7a}
   .seqgrid{flex:1;overflow:auto;position:relative}
   .lane{position:relative;height:24px;border-bottom:1px solid #20242f}
   .lane.src{background:#241f12}
@@ -224,6 +226,8 @@
       <button id="seqPlay" class="primary">▶ Play</button>
       <button id="seqViewBtn" class="ghost" title="Toggle piano-roll / Ben Johnston staff notation">𝄞 Score</button>
       <button id="rhythmBtn" class="ghost" title="Rhythm map: choose the divisions notes snap to">𝅘𝅥𝅮 Rhythm</button>
+      <span class="t" id="rchips" title="active snap divisions — click one to remove"></span>
+      <button id="pumpBtn" class="ghost" title="Duplicate the loop after itself, retuned to where the progression landed (Ctrl+B). Press again to keep spiralling.">⤵ Pump</button>
       <span class="t">BPM</span><input id="bpm" type="number" value="100" min="20" max="300" step="1"/>
       <span class="t">bars</span><select id="seqBars"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select>
       <button id="seqZin" class="ghost" style="width:auto;padding:6px 8px" title="Zoom in">+</button>
@@ -243,6 +247,8 @@ function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
 function mul(a,b){return fr(a.n*b.n,a.d*b.d);}
 function div(a,b){return fr(a.n*b.d,a.d*b.n);}
 function eqf(a,b){return a.n===b.n&&a.d===b.d;}
+function addf(a,b){return fr(a.n*b.d+b.n*a.d,a.d*b.d);}
+function subf(a,b){return fr(a.n*b.d-b.n*a.d,a.d*b.d);}
 function parseRatio(s){
   s=s.trim();
   if(s.includes('/')){const[a,b]=s.split('/').map(x=>parseInt(x,10));if(b)return fr(a,b);}
@@ -306,7 +312,7 @@ const NOW=()=>performance.now();
 function rootFreq(){return parseFloat(document.getElementById('rootFreq').value)||261.63;}
 function rootName(){return document.getElementById('rootName').value||'C';}
 const SAL_FLOOR=0.28, SAL_MAX=3;   // salience never fully dies; caps at SAL_MAX
-function addRoot(){notes=[{id:0,ratio:fr(1,1),parent:null,interval:fr(1,1),name:rootName(),salience:0.8}];nextId=1;selected.clear();hits=[];}
+function addRoot(){notes=[{id:0,ratio:fr(1,1),parent:null,interval:fr(1,1),name:rootName(),salience:0.8}];nextId=1;selected.clear();hits=[];pumpState={blockStart:0};}
 function noteFreq(f){return rootFreq()*f.n/f.d;}
 function nameOf(n){return n.id===0?rootName():johnston(n.ratio);}
 function bump(n){if(n)n.salience=Math.min(SAL_MAX,(n.salience||0)+1);}
@@ -397,7 +403,7 @@ function snapPick(cands,targetCents){
 let view={x:0,y:0,k:1};
 const svg=document.getElementById('svg');
 const PXCENT=0.42;
-function render(){renderTable();renderParentSelect();renderQuick();renderScene();renderPreview();renderSeq();}
+function render(){renderTable();renderParentSelect();renderQuick();renderScene();renderPreview();renderSeq();renderRChips();}
 
 function renderTable(){
   const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
@@ -765,6 +771,7 @@ function rhythmNodeList(){
     put(2,e2);put(3,e3);put(5,e5);put(7,e7);
     const v=n/d;
     if(v>2.001||v<1/64-1e-9)continue;
+    if(n*d>96)continue;               // keep the map readable when 5/7 are on
     const f=fr(n,d);
     out.push({f,v,e3,e5,e7,key:f.n+'/'+f.d});
   }
@@ -799,6 +806,21 @@ function gridBg(){
   });
   return layers.join(',');
 }
+function renderRChips(){
+  const el=document.getElementById('rchips');if(!el)return;
+  el.innerHTML='<span style="opacity:.6">snap:</span> ';
+  [...rhythmDivs].map(s=>parseRatio(s)).filter(Boolean)
+    .sort((a,b)=>b.n/b.d-a.n/a.d).forEach(f=>{
+    const b=document.createElement('button');
+    b.className='chip ghost rchip';b.textContent=f.n+'/'+f.d;
+    b.onclick=()=>{
+      if(rhythmDivs.size>1)rhythmDivs.delete(f.n+'/'+f.d);
+      renderRChips();renderSeq();
+      if(document.getElementById('rpanel').style.display!=='none')renderRhythm();
+    };
+    el.appendChild(b);
+  });
+}
 function renderRhythm(){
   const pr=document.getElementById('rprimes');
   pr.innerHTML='';
@@ -830,7 +852,7 @@ function renderRhythm(){
       const k=g.dataset.key;
       if(rhythmDivs.has(k)){if(rhythmDivs.size>1)rhythmDivs.delete(k);}
       else rhythmDivs.add(k);
-      renderRhythm();renderSeq();
+      renderRhythm();renderRChips();renderSeq();
     });
   });
 }
@@ -1050,33 +1072,35 @@ function seqStart(){
   seq.barSec=240/bpm;                 // 4 beats per bar
   seq.loopBars=BARS;
   seq.t0=a.currentTime+0.08;
-  seq.events=hits.map(h=>({id:h.id,oct:h.oct,sb:frv(h.start),lb:frv(h.len)}))
-    .filter(e=>e.sb<seq.loopBars)      // hits beyond the loop (from a longer bar count) wait
-    .sort((x,y)=>x.sb-y.sb);
-  seq.evIdx=0;seq.loopK=0;
+  seq.schedTime=a.currentTime;
   document.getElementById('seqPlay').textContent='■ Stop';
   seq.timer=setInterval(seqSchedule,25);
   seqSchedule();
 }
+// reads `hits` live each window, so notes added/removed while looping are
+// picked up on their next occurrence — no restart needed
 function seqSchedule(){
-  const a=audio(),horizon=a.currentTime+0.15;
-  const evs=seq.events;
-  if(!evs.length)return;
-  let guard=0;
-  while(guard++<500){
-    const ev=evs[seq.evIdx];
-    const t=seq.t0+(seq.loopK*seq.loopBars+ev.sb)*seq.barSec;
-    if(t>horizon)break;
-    const n=notes.find(x=>x.id===ev.id);
-    if(n){
-      const hz=laneFreq(n,ev.oct),dur=Math.max(0.06,ev.lb*seq.barSec);
+  const a=audio();
+  const w0=seq.schedTime, w1=a.currentTime+0.16;
+  if(w1<=w0)return;
+  const per=seq.loopBars*seq.barSec;
+  hits.forEach(h=>{
+    const sb=frv(h.start);
+    if(sb>=seq.loopBars)return;
+    const first=seq.t0+sb*seq.barSec;
+    let k=Math.ceil((w0-first)/per-1e-9);if(k<0)k=0;
+    for(;;k++){
+      const t=first+k*per;
+      if(t>=w1)break;
+      if(t<w0)continue;
+      const n=notes.find(x=>x.id===h.id);if(!n)break;
+      const hz=laneFreq(n,h.oct),dur=Math.max(0.06,frv(h.len)*seq.barSec);
       playFreq(hz,Math.max(t,a.currentTime),dur,0.2);
       const dly=Math.max(0,(t-a.currentTime)*1000);
       setTimeout(()=>{if(seq.playing){bump(n);midiPlay(hz,dur);}},dly);
     }
-    seq.evIdx++;
-    if(seq.evIdx>=evs.length){seq.evIdx=0;seq.loopK++;}
-  }
+  });
+  seq.schedTime=w1;
 }
 function seqStop(){
   seq.playing=false;clearInterval(seq.timer);seq.posBars=-1;
@@ -1096,6 +1120,82 @@ function seqFrame(){
   });
 }
 
+//// ---- comma-pump paste (Ctrl+B) --------------------------------------------
+// Duplicates the last block of music after itself, RETUNED so the copy is tuned
+// from where the progression landed: if your chords drift a comma, each paste
+// slides the whole constellation another comma down the lattice.
+let pumpState={blockStart:0};
+let bannerT;
+function banner(msg){seqBanner.textContent=msg;clearTimeout(bannerT);
+  bannerT=setTimeout(()=>{if(!place.on)seqBanner.textContent='';},5000);}
+function setBars(v){
+  BARS=v;
+  const s=document.getElementById('seqBars');
+  if(![...s.options].some(o=>+o.value===v)){
+    const o=document.createElement('option');o.value=v;o.textContent=v;s.appendChild(o);
+  }
+  s.value=v;
+}
+function hitAbsCents(h){const n=notes.find(x=>x.id===h.id);return n?cents(n.ratio)+1200*h.oct:0;}
+function pumpDuplicate(){
+  if(!hits.length){banner('nothing to pump — sketch a progression first');return;}
+  const bs=pumpState.blockStart||0;
+  const block=hits.filter(h=>frv(h.start)>=bs-1e-9);
+  if(!block.length){banner('nothing after the last paste point');return;}
+  const blockEnd=Math.max(...block.map(h=>frv(h.start)+frv(h.len)));
+  const blockLen=Math.max(1,Math.ceil(blockEnd-bs-1e-6));   // whole bars
+  const need=bs+blockLen*2;
+  if(need>32){banner('bar limit (32) reached');return;}
+  // drift = root of the block's last chord vs root of its first chord, reduced
+  // to the nearest unison. "Tune the copy to the tonic of the last chord."
+  const starts=block.map(h=>frv(h.start));
+  const t0=Math.min(...starts),tL=Math.max(...starts);
+  // chord root = the note the others stack most simply ABOVE (octave-reduced
+  // upward intervals): a root hears its chord as 3/2s and 5/4s over itself.
+  // Robust to inversions, and doesn't mistake the fifth-below for the root.
+  const chordRoot=list=>{
+    let best=null,bc=1e9;
+    list.forEach(h=>{
+      const c=notes.find(x=>x.id===h.id);if(!c)return;
+      let s=0;
+      list.forEach(o=>{if(o===h)return;const on=notes.find(x=>x.id===o.id);
+        if(on){const iv=octReduce(div(on.ratio,c.ratio));s+=log2(iv.n*iv.d);}});
+      if(s<bc){bc=s;best=c;}
+    });
+    return best;
+  };
+  const nF=chordRoot(block.filter(h=>Math.abs(frv(h.start)-t0)<1e-6));
+  const nL=chordRoot(block.filter(h=>Math.abs(frv(h.start)-tL)<1e-6));
+  if(!nF||!nL){banner('could not find chord roots');return;}
+  let drift=octReduce(div(nL.ratio,nF.ratio));
+  if(cents(drift)>600)drift=fr(drift.n,drift.d*2);          // nearest unison, may be <1
+  if(need>BARS)setBars(need);
+  const plain=eqf(drift,fr(1,1));
+  block.forEach(h=>{
+    const n=notes.find(x=>x.id===h.id);if(!n)return;
+    const pcNew=octReduce(mul(n.ratio,drift));
+    let tn=notes.find(x=>eqf(x.ratio,pcNew));
+    if(!tn){
+      tn={id:nextId++,ratio:pcNew,parent:n.id,interval:drift,name:'',salience:.9,gamut:true};
+      notes.push(tn);
+    }else tn.gamut=true;
+    const total=cents(n.ratio)+1200*h.oct+cents(drift);      // preserve absolute pitch
+    let no=Math.round((total-cents(pcNew))/1200);
+    no=Math.max(OCTS[OCTS.length-1],Math.min(OCTS[0],no));
+    hits.push({id:tn.id,oct:no,start:addf(h.start,fr(blockLen,1)),len:h.len,div:h.div});
+  });
+  pumpState.blockStart=bs+blockLen;
+  if(seq.playing)seq.loopBars=BARS;                          // let the loop grow live
+  banner(plain
+    ?'pumped · no drift detected (first & last chords share a root) — plain duplicate'
+    :`pumped · copy retuned by ${drift.n}/${drift.d} (${cents(drift)>0?'+':''}${cents(drift).toFixed(1)}¢) — Ctrl+B again to keep spiralling`);
+  render();
+}
+document.getElementById('pumpBtn').onclick=pumpDuplicate;
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&(e.key==='b'||e.key==='B')){e.preventDefault();pumpDuplicate();}
+});
+
 //// ---- project save/load ----------------------------------------------------
 const STORE_KEY='lattice-project-v1';
 function serialize(){
@@ -1112,11 +1212,12 @@ function deserialize(st){
   document.getElementById('rootName').value=st.root||'C';
   document.getElementById('rootFreq').value=st.freq||261.63;
   document.getElementById('bpm').value=st.bpm||100;
-  BARS=st.bars||1;document.getElementById('seqBars').value=BARS;
+  setBars(st.bars||1);
   notes=st.notes.map(o=>({id:o.id,ratio:fr(o.n,o.d),parent:o.parent,interval:fr(1,1),
     name:'',salience:0.4,gamut:o.gamut!==false}));
   nextId=st.nextId||Math.max(0,...notes.map(n=>n.id))+1;
   hits=(st.hits||[]).map(o=>({id:o.id,oct:o.oct,start:fr(o.sn,o.sd),len:fr(o.ln,o.ld),div:o.div}));
+  pumpState={blockStart:0};
   if(Array.isArray(st.rdivs)&&st.rdivs.length)rhythmDivs=new Set(st.rdivs);
   if(st.rprimes)rhythmPrimes=st.rprimes;
   selected.clear();seqAutoScroll=true;
@@ -1238,15 +1339,25 @@ window.addEventListener('mousemove',e=>{
   document.getElementById('seq').style.height=h+'px';
 });
 window.addEventListener('mouseup',()=>{seqResize=null;});
-// note-length drag: length extends in whole units of the note's snap division
+// note-length drag: the note END snaps to any enabled division's gridline
+// (simpler divisions stickier), so every length the rhythm map allows is reachable
 grid.addEventListener('mousemove',e=>{
   if(!seqDrag)return;
   const r=grid.getBoundingClientRect();
   const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
-  const h=seqDrag.hit,dv=seqDrag.div,step=dv.n/dv.d;
-  const units=Math.max(1,Math.ceil((xBars-frv(h.start))/step-0.25));
-  const newLen=fr(units*dv.n,dv.d);
-  if(!eqf(newLen,h.len)){h.len=newLen;renderSeq();}
+  const h=seqDrag.hit,sb=frv(h.start);
+  let best=null,bs=1e9;
+  divList().forEach(dv=>{
+    const st=dv.n/dv.d;
+    const kMin=Math.floor(sb/st+1e-9)+1;               // first gridpoint after the start
+    const k=Math.max(kMin,Math.round(xBars/st));
+    const hd=Math.abs(log2(dv.n*dv.d));
+    const sc=Math.abs(xBars-k*st)*barW()-4*Math.max(0,5-hd);
+    if(sc<bs){bs=sc;best=fr(k*dv.n,dv.d);}
+  });
+  if(!best)return;
+  const newLen=subf(best,h.start);
+  if(newLen.n>0&&!eqf(newLen,h.len)){h.len=newLen;renderSeq();}
 });
 window.addEventListener('mouseup',()=>{
   if(!seqDrag){return;}
