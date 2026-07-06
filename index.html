@@ -1332,42 +1332,90 @@ document.getElementById('showCentsChk').addEventListener('change',e=>{
   render();
 });
 //// ---- MIDI file export ------------------------------------------------------
-function exportMidi(){
-  if(!hits.length){banner('nothing to export — sketch something first');return;}
-  const PPQ=480,ticksPerBar=PPQ*4;
+// Build a Standard MIDI File carrying the exact tuning as pitch bends.
+//  mode 'mpe'  — proper MPE: each simultaneous note gets its own member channel
+//                (voice-allocated so overlaps never collide), ±48-semitone bends
+//                with the standard RPN. Polyphonic chords stay in tune in an
+//                MPE-aware DAW (Bitwig/Cubase/Logic/Reaper/Ableton 11+/Studio One)
+//                driving an MPE synth (Surge XT in MPE mode).
+//  mode 'mono' — everything on channel 1, bend before each note (±range). Correct
+//                for a single melodic line on any synth; chords share the last bend.
+function buildMidi(mode){
+  const PPQ=480,tpb=PPQ*4;
   const bpm=parseFloat(document.getElementById('bpm').value)||100;
-  const range=midiRange();
-  const evs=[];let rot=0;
-  hits.forEach(h=>{
-    const n=notes.find(x=>x.id===h.id);if(!n)return;
-    const m=hzToMidiFloat(laneFreq(n,h.oct));
-    const base=Math.max(0,Math.min(127,Math.round(m)));
-    const bend=Math.max(-1,Math.min(1,(m-base)/range));
-    const bv=Math.max(0,Math.min(16383,Math.round(8192+bend*8191)));
-    let c=rot++%15;if(c>=9)c++;                       // round-robin, skip ch10 (GM drums)
-    const t0=Math.round(frv(h.start)*ticksPerBar);
-    const t1=Math.max(t0+10,Math.round((frv(h.start)+frv(h.len))*ticksPerBar));
-    evs.push({t:t0,o:0,b:[0xE0|c,bv&0x7f,(bv>>7)&0x7f]});
-    evs.push({t:t0,o:1,b:[0x90|c,base,100]});
-    evs.push({t:t1,o:2,b:[0x80|c,base,0]});
+  const range=mode==='mpe'?48:midiRange();
+  const members=mode==='mpe'?[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]:[0];
+  const raw=[];
+  // set pitch-bend range (RPN 0) on every channel we'll use, at t=0
+  members.forEach(c=>{
+    raw.push({t:0,o:-2,b:[0xB0|c,101,0]},{t:0,o:-2,b:[0xB0|c,100,0]},
+             {t:0,o:-2,b:[0xB0|c,6,Math.min(127,range)]},{t:0,o:-2,b:[0xB0|c,38,0]},
+             {t:0,o:-2,b:[0xB0|c,101,127]},{t:0,o:-2,b:[0xB0|c,100,127]});
   });
-  evs.sort((a,b)=>a.t-b.t||a.o-b.o);
+  const evs=hits.map(h=>{
+    const n=notes.find(x=>x.id===h.id);if(!n)return null;
+    const m=hzToMidiFloat(laneFreq(n,h.oct));
+    const t0=Math.round(frv(h.start)*tpb);
+    return {m,t0,t1:Math.max(t0+10,Math.round((frv(h.start)+frv(h.len))*tpb))};
+  }).filter(Boolean).sort((a,b)=>a.t0-b.t0);
+  const busy=new Array(16).fill(-1);            // busy-until tick per channel
+  evs.forEach(ev=>{
+    let c;
+    if(mode==='mpe'){
+      c=members.find(ch=>busy[ch]<=ev.t0);
+      if(c===undefined)c=members.reduce((a,ch)=>busy[ch]<busy[a]?ch:a,members[0]); // steal soonest-free
+    }else c=0;
+    busy[c]=ev.t1;
+    const base=Math.max(0,Math.min(127,Math.round(ev.m)));
+    const bend=Math.max(-1,Math.min(1,(ev.m-base)/range));
+    const bv=Math.max(0,Math.min(16383,Math.round(8192+bend*8191)));
+    raw.push({t:ev.t0,o:0,b:[0xE0|c,bv&0x7f,(bv>>7)&0x7f]});
+    raw.push({t:ev.t0,o:1,b:[0x90|c,base,100]});
+    raw.push({t:ev.t1,o:2,b:[0x80|c,base,0]});
+  });
+  raw.sort((a,b)=>a.t-b.t||a.o-b.o);
   const vlen=v=>{const out=[v&0x7f];while(v>>=7)out.unshift(0x80|(v&0x7f));return out;};
   const us=Math.round(60000000/bpm);
   let tr=[0x00,0xFF,0x51,0x03,(us>>16)&255,(us>>8)&255,us&255];
   let last=0;
-  evs.forEach(e=>{tr.push(...vlen(e.t-last));last=e.t;tr.push(...e.b);});
+  raw.forEach(e=>{tr.push(...vlen(e.t-last));last=e.t;tr.push(...e.b);});
   tr.push(0x00,0xFF,0x2F,0x00);
   const u32=v=>[(v>>24)&255,(v>>16)&255,(v>>8)&255,v&255];
   const u16=v=>[(v>>8)&255,v&255];
-  const file=new Uint8Array([77,84,104,100,...u32(6),...u16(0),...u16(1),...u16(PPQ),
-                             77,84,114,107,...u32(tr.length),...tr]);
+  return new Uint8Array([77,84,104,100,...u32(6),...u16(0),...u16(1),...u16(PPQ),
+                         77,84,114,107,...u32(tr.length),...tr]);
+}
+function exportMidi(mode){
+  if(!hits.length){banner('nothing to export — sketch something first');return;}
+  const file=buildMidi(mode);
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([file],{type:'audio/midi'}));
-  a.download='lattice.mid';a.click();URL.revokeObjectURL(a.href);
-  banner(`exported ${hits.length} notes as .mid — pitch bends carry the tuning; set your synth's bend range to ${range} semitones`);
+  a.download=mode==='mpe'?'lattice-mpe.mid':'lattice-mono.mid';a.click();URL.revokeObjectURL(a.href);
+  banner(mode==='mpe'
+    ?`exported ${hits.length} notes as MPE .mid (±48 st bends) — import into an MPE DAW + MPE synth (Surge in MPE mode)`
+    :`exported ${hits.length} notes as mono .mid (±${midiRange()} st) — one melodic line, any synth; set the synth's bend range to match`);
 }
-document.getElementById('midiExport').onclick=exportMidi;
+function openExportModal(){
+  if(!hits.length){banner('nothing to export — sketch something first');return;}
+  const bg=document.createElement('div');bg.className='modalbg';
+  bg.innerHTML=`<div class="modal">
+    <h3>Export MIDI</h3>
+    <p class="sub">Plain MIDI is 12-tone, so the tuning rides on pitch bends. Choose how they're carried —
+      it depends on what will read the file.</p>
+    <button class="sysbtn ghost" data-m="mpe"><b>MPE — polyphonic (recommended)</b>
+      <div class="hint" style="margin-top:3px">One channel per simultaneous note (voice-allocated so bends never
+      collide), ±48-semitone bends with the standard RPN. Chords stay in tune. Import into an <b>MPE-aware DAW</b>
+      — Bitwig, Cubase, Logic, Reaper, Ableton 11+, Studio One — and play an MPE synth (<b>Surge XT in MPE mode</b>).</div></button>
+    <button class="sysbtn ghost" data-m="mono"><b>Mono — one line, any synth</b>
+      <div class="hint" style="margin-top:3px">Everything on channel 1, a bend before each note (±${midiRange()} st).
+      Correct for a <b>single melodic line</b> on any synth, including FL's stock ones. Chords share the last note's bend.</div></button>
+    <div class="modalfoot"><button id="xCancel" class="ghost">Cancel</button></div></div>`;
+  document.body.appendChild(bg);
+  bg.querySelectorAll('.sysbtn').forEach(b=>b.onclick=()=>{exportMidi(b.dataset.m);bg.remove();});
+  bg.querySelector('#xCancel').onclick=()=>bg.remove();
+  bg.addEventListener('mousedown',e=>{if(e.target===bg)bg.remove();});
+}
+document.getElementById('midiExport').onclick=openExportModal;
 // retune a set of hits (in place) by an exact factor: new pitch classes are
 // created on the lattice (parent = original note, interval = the factor),
 // absolute pitch preserved via octave adjustment

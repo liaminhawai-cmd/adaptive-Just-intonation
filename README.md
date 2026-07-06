@@ -162,9 +162,19 @@ There are two **modes**:
 Caveats: Mono mode is monophonic-correct only — for true polyphonic microtonal chords you need a
 real MPE synth (MPE mode) or the MTS-ESP path below. Fine for melodic sketching as-is.
 
-**Export .mid** writes a standard MIDI file: exact-fraction timing at 480 PPQ, tempo embedded,
-each note preceded by a pitch bend carrying its tuning (notes round-robin across channels). Set
-the receiving synth's bend range to match this app's field.
+**Export .mid** writes a standard MIDI file (exact-fraction timing at 480 PPQ, tempo embedded),
+and asks how to carry the tuning:
+
+- **MPE — polyphonic (recommended)**: each simultaneous note gets its own member channel
+  (voice-allocated so overlapping notes never share a channel and their bends can't collide),
+  ±48-semitone bends with the standard RPN. Chords stay in tune. Import into an **MPE-aware DAW**
+  — Bitwig, Cubase, Logic, Reaper, Ableton 11+, Studio One — playing an MPE synth (**Surge XT in
+  MPE mode**), and the whole microtonal arrangement comes in correctly.
+- **Mono — one line, any synth**: everything on channel 1, a bend before each note. Correct for a
+  single melodic line on any synth (incl. FL's stock ones); chords share the last note's bend.
+
+Note on FL Studio: its piano roll merges channels on import, so the MPE file won't stay in tune
+there directly — use one of the MPE-aware DAWs above, or Surge XT standalone, for polyphony.
 
 **Import .mid** goes the other way, and since incoming MIDI is 12-tone it *negotiates*: a dialog
 asks which pitch class becomes 1/1 (auto-guessed from the file) and which JI scale to project the
