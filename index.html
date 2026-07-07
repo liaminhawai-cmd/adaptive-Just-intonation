@@ -140,6 +140,8 @@
        display:flex;gap:8px;align-items:center;font-size:12px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
   .tunebox input{width:76px;padding:5px 7px}
   .tunebox button{width:auto;padding:5px 11px}
+  .tunebox.pivot{flex-wrap:wrap;max-width:600px;gap:6px}
+  .tunebox.pivot .pivsug{border-color:var(--acc2)}
   /* rhythm map */
   .rpanel{position:absolute;right:10px;bottom:100%;margin-bottom:8px;background:rgba(20,22,28,.97);
        border:1px solid var(--line);border-radius:10px;z-index:9;padding:10px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
@@ -297,7 +299,7 @@
       <button id="seqViewBtn" class="ghost" title="Toggle piano-roll / Ben Johnston staff notation">𝄞 Score</button>
       <button id="rhythmBtn" class="ghost" title="Rhythm map: choose the divisions notes snap to">𝅘𝅥𝅮 Rhythm</button>
       <span class="t" id="rchips" title="active snap divisions — click one to remove"></span>
-      <button id="pumpBtn" class="ghost" title="Duplicate the loop after itself, retuned to where the progression landed (Ctrl+B). Press again to keep spiralling.">⤵ Pump</button>
+      <button id="pumpBtn" class="ghost" title="Pump (Ctrl+B): duplicate the block after itself, then define the pivot — which copy note tunes from which previous-chord note, by which ratio. Preview before you commit.">⤵ Pump</button>
       <button id="selBtn" class="ghost" title="Box-select mode: drag a rectangle to select notes (or hold shift/ctrl anytime)">⬚ Select</button>
       <span class="t">BPM</span><input id="bpm" type="number" value="100" min="20" max="300" step="1"/>
       <span class="t">bars</span><select id="seqBars"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select>
@@ -1329,49 +1331,67 @@ function setBars(v){
   s.value=v;
 }
 function hitAbsCents(h){const n=notes.find(x=>x.id===h.id);return n?cents(n.ratio)+1200*h.oct:0;}
+function lowestHit(list){return list.reduce((m,h)=>hitAbsCents(h)<hitAbsCents(m)?h:m);}
+// chord root = the note the others stack most simply ABOVE (octave-reduced
+// upward intervals). Robust to inversions; won't mistake the fifth-below.
+function chordRootHit(list){
+  let best=null,bc=1e9;
+  list.forEach(h=>{const c=notes.find(x=>x.id===h.id);if(!c)return;let s=0;
+    list.forEach(o=>{if(o===h)return;const on=notes.find(x=>x.id===o.id);
+      if(on){const iv=octReduce(div(on.ratio,c.ratio));s+=log2(iv.n*iv.d);}});
+    if(s<bc){bc=s;best=h;}});
+  return best;
+}
+// Pump: duplicate the block after itself at UNISON, then define the pivot —
+// which note of the copy tunes from which note of the previous chord, by which
+// ratio. Nothing is transposed until you choose; you can preview and override.
 function pumpDuplicate(){
   if(!hits.length){banner('nothing to pump — sketch a progression first');return;}
   const bs=pumpState.blockStart||0;
   const block=hits.filter(h=>frv(h.start)>=bs-1e-9);
   if(!block.length){banner('nothing after the last paste point');return;}
   const blockEnd=Math.max(...block.map(h=>frv(h.start)+frv(h.len)));
-  const blockLen=Math.max(1,Math.ceil(blockEnd-bs-1e-6));   // whole bars
+  const blockLen=Math.max(1,Math.ceil(blockEnd-bs-1e-6));
   const need=bs+blockLen*2;
   if(need>32){banner('bar limit (32) reached');return;}
-  // drift = root of the block's last chord vs root of its first chord, reduced
-  // to the nearest unison. "Tune the copy to the tonic of the last chord."
-  const starts=block.map(h=>frv(h.start));
-  const t0=Math.min(...starts),tL=Math.max(...starts);
-  // chord root = the note the others stack most simply ABOVE (octave-reduced
-  // upward intervals): a root hears its chord as 3/2s and 5/4s over itself.
-  // Robust to inversions, and doesn't mistake the fifth-below for the root.
-  const chordRoot=list=>{
-    let best=null,bc=1e9;
-    list.forEach(h=>{
-      const c=notes.find(x=>x.id===h.id);if(!c)return;
-      let s=0;
-      list.forEach(o=>{if(o===h)return;const on=notes.find(x=>x.id===o.id);
-        if(on){const iv=octReduce(div(on.ratio,c.ratio));s+=log2(iv.n*iv.d);}});
-      if(s<bc){bc=s;best=c;}
-    });
-    return best;
-  };
-  const nF=chordRoot(block.filter(h=>Math.abs(frv(h.start)-t0)<1e-6));
-  const nL=chordRoot(block.filter(h=>Math.abs(frv(h.start)-tL)<1e-6));
-  if(!nF||!nL){banner('could not find chord roots');return;}
-  let drift=octReduce(div(nL.ratio,nF.ratio));
-  if(cents(drift)>600)drift=fr(drift.n,drift.d*2);          // nearest unison, may be <1
   if(need>BARS)setBars(need);
-  const plain=eqf(drift,fr(1,1));
   const copies=block.map(h=>({id:h.id,oct:h.oct,start:addf(h.start,fr(blockLen,1)),len:h.len,div:h.div}));
   hits.push(...copies);
-  retuneBlock(copies,drift);
   pumpState.blockStart=bs+blockLen;
-  if(seq.playing)seq.loopBars=BARS;                          // let the loop grow live
-  banner(plain
-    ?'pumped · no drift detected (first & last chords share a root) — plain duplicate'
-    :`pumped · copy retuned by ${drift.n}/${drift.d}${showCents?' ('+(cents(drift)>0?'+':'')+cents(drift).toFixed(1)+'¢)':''} — Ctrl+B again to keep spiralling`);
-  render();
+  if(seq.playing)seq.loopBars=BARS;
+  retune={pasted:new Set(copies)};
+  histLabel='pump';render();
+  openPivotPanel(block,copies);
+}
+// suggestions + preview panel shown after a pump duplicate
+function openPivotPanel(origBlock,copies){
+  closeTuneBox();
+  const oLast=Math.max(...origBlock.map(h=>frv(h.start)));
+  const lastChord=origBlock.filter(h=>Math.abs(frv(h.start)-oLast)<1e-6);
+  const cFirst=Math.min(...copies.map(h=>frv(h.start)));
+  const firstChord=copies.filter(h=>Math.abs(frv(h.start)-cFirst)<1e-6);
+  const sugg=[];
+  if(lastChord.length&&firstChord.length){
+    sugg.push({label:'bass → bass',P:lowestHit(firstChord),A:lowestHit(lastChord)});
+    const rF=chordRootHit(firstChord),rL=chordRootHit(lastChord);
+    if(rF&&rL)sugg.push({label:'root → root',P:rF,A:rL});
+    // common tone: same pitch class in both chords → default them to unison
+    for(const c of firstChord){
+      const cn=octReduce(notes.find(x=>x.id===c.id).ratio);
+      const m=lastChord.find(l=>eqf(octReduce(notes.find(x=>x.id===l.id).ratio),cn));
+      if(m){sugg.push({label:'keep common tone',P:c,A:m,R:'1/1'});break;}
+    }
+  }
+  const box=document.createElement('div');box.className='tunebox pivot';box.id='tunebox';
+  let html=`<span style="width:100%"><b>Pump pivot</b> — tune the copy <i>from</i> the previous chord. Pick a relationship (it previews), then set the ratio · or click a copy note then a source note · Esc keeps unison</span>`;
+  sugg.forEach((s,i)=>{const nP=notes.find(x=>x.id===s.P.id),nA=notes.find(x=>x.id===s.A.id);
+    html+=`<button class="ghost pivsug" data-i="${i}">${s.label} · ${nameOf(nP)}↔${nameOf(nA)}</button>`;});
+  html+=`<button class="ghost" id="pivManual">manual…</button><button class="ghost" id="pivKeep">keep unison</button>`;
+  box.innerHTML=html;
+  document.getElementById('seq').appendChild(box);
+  box.querySelectorAll('.pivsug').forEach(b=>b.onclick=()=>{const s=sugg[+b.dataset.i];openTuneBox(s.P,s.A,s.R);});
+  document.getElementById('pivManual').onclick=()=>{closeTuneBox();retune.from=null;banner('click a COPY note, then the note to tune it FROM');};
+  document.getElementById('pivKeep').onclick=()=>{retune=null;closeTuneBox();banner('kept unison copy');render();};
 }
 document.getElementById('pumpBtn').onclick=pumpDuplicate;
 let selMode=false;
@@ -1642,34 +1662,41 @@ function retuneClick(h){
   if(h===retune.from)return;
   openTuneBox(retune.from,h);
 }
-function openTuneBox(P,A){
+function openTuneBox(P,A,presetR){
   closeTuneBox();
   const nP=notes.find(x=>x.id===P.id),nA=notes.find(x=>x.id===A.id);
   const iv=div(hitAbsRatio(P),hitAbsRatio(A));
   const cand=snapPick(genCandidates(3),cents(iv));
-  const def=cand?cand.ratio.n+'/'+cand.ratio.d:iv.n+'/'+iv.d;
+  const def=presetR||(cand?cand.ratio.n+'/'+cand.ratio.d:iv.n+'/'+iv.d);
   const box=document.createElement('div');
   box.className='tunebox';box.id='tunebox';
-  box.innerHTML=`<span><b>${nameOf(nP)}${4+P.oct}</b> tuned from <b>${nameOf(nA)}${4+A.oct}</b> by</span>
+  box.innerHTML=`<span><b>${nameOf(nP)}${4+P.oct}</b> from <b>${nameOf(nA)}${4+A.oct}</b> by</span>
     <input id="tuneRatio" value="${def}"/>
+    <button id="tunePrev" class="ghost">▶ hear</button>
     <button id="tuneApply" class="primary">Apply</button>
-    <button id="tuneCancel" class="ghost">keep as is</button>`;
+    <button id="tuneCancel" class="ghost">cancel</button>`;
   document.getElementById('seq').appendChild(box);
-  const apply=()=>{
-    const r=parseRatio(document.getElementById('tuneRatio').value);
-    if(!r){banner('invalid ratio — use n/d like 5/4');return;}
-    const f=div(mul(hitAbsRatio(A),r),hitAbsRatio(P));
-    const pname=nameOf(nP),aname=nameOf(nA);
-    if(!eqf(f,fr(1,1)))retuneBlock([...retune.pasted],f);
-    retune=null;closeTuneBox();
-    banner(`pasted block retuned so ${pname} sits ${r.n}/${r.d} from ${aname}${showCents?' (shifted '+(cents(f)>0?'+':'')+cents(f).toFixed(1)+'¢)':''}`);
-    render();
-  };
+  const factor=()=>{const r=parseRatio(document.getElementById('tuneRatio').value);
+    if(!r)return null;return {r,f:div(mul(hitAbsRatio(A),r),hitAbsRatio(P))};};
+  // preview: play the copy/paste block's first-onset chord at the proposed tuning
+  const preview=()=>{const fx=factor();if(!fx)return;
+    const cop=[...retune.pasted],minS=Math.min(...cop.map(h=>frv(h.start)));
+    const chord=cop.filter(h=>Math.abs(frv(h.start)-minS)<1e-6);
+    const t=audio().currentTime;
+    chord.forEach(h=>{const n=notes.find(x=>x.id===h.id);
+      if(n)playFreq(laneFreq(n,h.oct)*(fx.f.n/fx.f.d),t,0.8,0.16);});};
+  const apply=()=>{const fx=factor();
+    if(!fx){banner('invalid ratio — n/d like 6/5');return;}
+    if(!eqf(fx.f,fr(1,1)))retuneBlock([...retune.pasted],fx.f);
+    retune=null;closeTuneBox();histLabel='pivot tune';
+    banner(`copy tuned so ${nameOf(nP)} sits ${fx.r.n}/${fx.r.d} from ${nameOf(nA)}${showCents?' (shifted '+(cents(fx.f)>0?'+':'')+cents(fx.f).toFixed(1)+'¢)':''}`);
+    render();};
+  document.getElementById('tunePrev').onclick=preview;
   document.getElementById('tuneApply').onclick=apply;
-  document.getElementById('tuneRatio').addEventListener('keydown',e=>{if(e.key==='Enter')apply();});
-  document.getElementById('tuneCancel').onclick=()=>{retune=null;closeTuneBox();banner('kept original tuning');renderSeq();};
-  document.getElementById('tuneRatio').focus();
-  document.getElementById('tuneRatio').select();
+  const inp=document.getElementById('tuneRatio');
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')apply();});
+  document.getElementById('tuneCancel').onclick=()=>{retune=null;closeTuneBox();banner('kept unison copy');renderSeq();};
+  inp.focus();inp.select();preview();
 }
 function closeTuneBox(){const b=document.getElementById('tunebox');if(b)b.remove();}
 document.addEventListener('keydown',e=>{

@@ -100,6 +100,21 @@ you land.
 - **Autosave**: the whole project (notes, key, hits, rhythm map, tempo) persists in the
   browser. **Export/Import .json** in the sidebar to keep or share pieces.
 
+## Pump — pivot-defined comma pumps
+
+**⤵ Pump** (or Ctrl+B) duplicates the current block after itself at unison, then asks you to
+**define the pivot** rather than transposing blindly: which note of the copy tunes *from* which
+note of the previous chord, and by what ratio. It suggests logical pivots (bass→bass, root→root,
+keep-a-common-tone) and lets you **preview** (hear the copy's chord at the proposed tuning) before
+committing — or click a copy note then a source note and type any ratio yourself. So "make the
+copy's C a 6/5 above the A of the last chord" or "the G a 7/4 below that E" are one gesture each.
+Press again to keep spiralling; every generation is comma-linked to its parent on the lattice.
+
+## Undo / history
+
+Full undo/redo (**Ctrl+Z** / **Ctrl+Shift+Z** / **Ctrl+Y**) with a labelled **edit-history** panel
+in the sidebar — click any entry to jump to that state.
+
 ## The living map
 
 The lattice is not static — it breathes with what you play:
