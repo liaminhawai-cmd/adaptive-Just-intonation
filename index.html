@@ -362,7 +362,7 @@
 </div>
 
 <script>
-const BUILD=30;   // bump every deploy so you can confirm you're on the latest
+const BUILD=31;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -2194,21 +2194,22 @@ const DEMOS={
     m('C',0,4),m('E',4,4),m('F',8,4),m('G',12,12), m('C',24,4),m('E',28,4),m('F',32,4),m('G',36,12),
     m('C',48,4),m('E',52,4),m('F',56,4),m('G',60,4)]},
 };
-// extended-jazz consonance: a 13th chord voiced straight from the harmonic
-// series (8:9:10:11:12:13) — silky in JI, harsh in 12-TET — then a bare octave
-// to contrast. Shows why "tall" chords like sound so smooth tuned justly.
+// extended-jazz consonance: a 13th chord voiced like the overtone series really
+// sits — open and sparse down low (octave, fifth), the colour tones (7th, 9th,
+// 11th, 13th) up high — and bloomed in bottom-up so it breathes instead of
+// hitting as one muddy block. Silky in JI, harsh in 12-TET.
 function loadHarmonic(){
   addRoot();hits=[];pumpState={blockStart:0};
-  document.getElementById('bpm').value=70;
+  document.getElementById('bpm').value=64;
   const add=r=>{const pc=octReduce(r);const ex=notes.find(x=>eqf(x.ratio,pc));
     if(ex){ex.gamut=true;return ex.id;}const id=nextId++;notes.push({id,ratio:pc,parent:0,interval:pc,name:'',salience:.5,gamut:true});return id;};
-  // harmonics 8..13 over a low root: 8/8,9/8,10/8,11/8,12/8,13/8 (root, 9th, 3rd, 11th, 5th, 13th)
-  const parts=[[1,1,-1],[9,8,0],[5,4,0],[11,8,0],[3,2,0],[13,8,0]];
-  parts.forEach(([n,dd,oct])=>{const id=add(fr(n,dd));hits.push({id,oct,start:fr(0,1),len:fr(3,1),div:'1/1'});});
-  const rid=add(fr(1,1));hits.push({id:rid,oct:-1,start:fr(3,1),len:fr(1,1),div:'1/1'});
-  hits.push({id:rid,oct:0,start:fr(3,1),len:fr(1,1),div:'1/1'});
+  // [pitch-class n/d, octave] — wide-open low end, dense colourful top
+  const parts=[[1,1,-2],[3,2,-1],[5,4,0],[7,4,0],[9,8,1],[11,8,1],[13,8,1]];
+  parts.forEach(([n,dd,oct],i)=>{const id=add(fr(n,dd));
+    const st=fr(i,16);                                   // bloom bottom-up, one 16th apart
+    hits.push({id,oct,start:st,len:subf(fr(4,1),st),div:'1/16'});});
   setBars(4);selected.clear();seqAutoScroll=true;histLabel='demo: harmonic';render();fitView();
-  banner('An 8:9:10:11:12:13 "13th chord" straight from the harmonic series — extended chords are SMOOTH in JI where 12-TET makes them clash. The 11/8 and 13/8 are the exotic colours.');
+  banner('A 13th chord voiced like the overtone series — open low (root, fifth), colour tones (7/4, 9/8, 11/8, 13/8) up high, bloomed bottom-up. Smooth in JI; the 11/8 & 13/8 are the exotic top colours.');
 }
 // original demonstration (not any specific copyrighted piece): a phrase that
 // modulates down by a syntonic comma each repeat — extended-JI comma motion.
