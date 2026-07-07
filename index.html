@@ -164,6 +164,11 @@
   .adsr{display:flex;gap:6px;margin-top:4px}
   .adcell{flex:1;display:flex;flex-direction:column;align-items:center;font-size:10px;color:var(--dim);gap:2px}
   .adcell input{width:100%}
+  .histlist{max-height:140px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:6px}
+  .histitem{padding:3px 9px;font-size:12px;cursor:pointer;border-bottom:1px solid #20242f;color:var(--dim)}
+  .histitem:hover{background:var(--panel2)}
+  .histitem.cur{color:var(--acc2);background:#241f12}
+  .histitem.future{opacity:.5}
   .seqgrip{position:absolute;top:-3px;left:0;right:0;height:7px;cursor:ns-resize;z-index:6}
   .seqgrip:hover{background:rgba(122,162,255,.25)}
   .ghostline{position:absolute;left:118px;right:0;height:0;border-top:2px dashed #fff;pointer-events:none;z-index:4}
@@ -237,9 +242,16 @@
   <h2>Internal synth</h2>
   <label>Master volume</label>
   <input type="range" id="synVol" min="0" max="1" step="0.01" />
-  <table class="osctbl"><thead><tr><th>osc</th><th>wave</th><th>oct</th><th>cents</th><th>level</th></tr></thead><tbody id="oscRows"></tbody></table>
+  <table class="osctbl"><thead><tr><th>osc</th><th>wave</th><th>oct</th><th>ratio</th><th>level</th></tr></thead><tbody id="oscRows"></tbody></table>
   <label style="margin-top:8px">Envelope (ADSR)</label>
   <div class="adsr" id="adsrRow"></div>
+
+  <h2>History</h2>
+  <div class="row">
+    <button id="undoBtn" class="ghost" title="Undo (Ctrl+Z)">↶ Undo</button>
+    <button id="redoBtn" class="ghost" title="Redo (Ctrl+Shift+Z)">↷ Redo</button>
+  </div>
+  <div class="histlist" id="histList"></div>
 
   <h2>Project</h2>
   <div class="row">
@@ -390,7 +402,7 @@ function addNote(parentId,interval){
   if(ex){ex.gamut=true;selected.clear();selected.add(ex.id);bump(ex);render();return ex;}
   const id=nextId++;
   const note={id,ratio,parent:parentId,interval,name:johnston(ratio),salience:1.2,gamut:true};
-  notes.push(note);selected.clear();selected.add(id);render();return note;
+  notes.push(note);selected.clear();selected.add(id);histLabel='add '+johnston(ratio);render();return note;
 }
 function gamutNotes(){return notes.filter(n=>n.gamut!==false);}
 
@@ -466,7 +478,7 @@ function snapPick(cands,targetCents){
 let view={x:0,y:0,k:1};
 const svg=document.getElementById('svg');
 const PXCENT=0.42;
-function render(){renderTable();renderParentSelect();renderQuick();renderScene();renderPreview();renderSeq();renderRChips();}
+function render(){renderTable();renderParentSelect();renderQuick();renderScene();renderPreview();renderSeq();renderRChips();markHistory();}
 
 function renderTable(){
   const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
@@ -685,7 +697,7 @@ function delNote(id){
   notes.filter(n=>n.parent===id).forEach(n=>{n.parent=0;});
   notes=notes.filter(n=>n.id!==id);selected.delete(id);
   hits=hits.filter(h=>h.id!==id);
-  render();
+  histLabel='delete note';render();
 }
 
 //// ---- audio: internal 3-oscillator synth with ADSR -----------------------
@@ -694,13 +706,14 @@ const WAVES=['sine','triangle','sawtooth','square'];
 const synth={
   vol:0.5,
   osc:[
-    {on:true, wave:'sawtooth', oct:0,  detune:0,  level:0.55},
-    {on:true, wave:'square',   oct:0,  detune:-7, level:0.30},
-    {on:true, wave:'sine',     oct:-1, detune:0,  level:0.55},
+    {on:true, wave:'sawtooth', oct:0,  ratio:{n:1,d:1}, level:0.55},
+    {on:true, wave:'square',   oct:0,  ratio:{n:1,d:1}, level:0.30},
+    {on:true, wave:'sine',     oct:-1, ratio:{n:1,d:1}, level:0.55},
   ],
   adsr:{a:0.008, d:0.12, s:0.65, r:0.28},   // seconds / 0-1 sustain
 };
 try{const s=JSON.parse(localStorage.getItem('lattice-ui')||'{}').synth;if(s)Object.assign(synth,s);}catch(e){}
+synth.osc.forEach(o=>{if(!o.ratio||!o.ratio.n)o.ratio={n:1,d:1};});   // ratio-based detune (JI-pure)
 function saveSynth(){try{const u=JSON.parse(localStorage.getItem('lattice-ui')||'{}');u.synth=synth;localStorage.setItem('lattice-ui',JSON.stringify(u));}catch(e){}}
 function audio(){
   if(!ac){
@@ -728,7 +741,7 @@ function voiceInto(a,dest,hz,t0,peak,sustainHold){
   synth.osc.forEach(o=>{
     if(!o.on||o.level<=0)return;
     const osc=a.createOscillator(),g=a.createGain();
-    osc.type=o.wave;osc.frequency.value=hz*Math.pow(2,o.oct);osc.detune.value=o.detune;
+    osc.type=o.wave;osc.frequency.value=hz*Math.pow(2,o.oct)*(o.ratio.n/o.ratio.d);
     g.gain.value=o.level;osc.connect(g).connect(env);
     osc.start(t0);osc.stop(stopT);
   });
@@ -756,7 +769,7 @@ function toggleDrone(n,oct=0){
     const oscs=[],hz=laneFreq(n,oct);
     synth.osc.forEach(o=>{if(!o.on||o.level<=0)return;
       const osc=a.createOscillator(),g=a.createGain();
-      osc.type=o.wave;osc.frequency.value=hz*Math.pow(2,o.oct);osc.detune.value=o.detune;
+      osc.type=o.wave;osc.frequency.value=hz*Math.pow(2,o.oct)*(o.ratio.n/o.ratio.d);
       g.gain.value=o.level;osc.connect(g).connect(env);osc.start();oscs.push(osc);});
     drones.set(key,{oscs,env});
     midiPlay(hz,1.5);bump(n);
@@ -1126,7 +1139,7 @@ function renderSeq(){
     seqAutoScroll=false;
   }
   drawPlaceGhost();drawPlayhead();drawMoveGhost();drawRelOverlay();
-  scheduleSave();
+  scheduleSave();markHistory();
 }
 function drawMoveGhost(){
   grid.querySelectorAll('.movingghost').forEach(e=>e.remove());
@@ -1810,7 +1823,7 @@ function projectMidi(){
   });
   setBars(Math.max(1,Math.min(64,Math.ceil(maxEnd/tpb-1e-9))));
   document.getElementById('bpm').value=Math.round(60000000/parsed.tempo);
-  midiPending=null;selected.clear();seqAutoScroll=true;render();fitView();
+  midiPending=null;selected.clear();seqAutoScroll=true;histLabel='import MIDI';render();fitView();
   banner(`imported ${hits.length} notes in ${TUNING_SYS[midiChoice.sys].name}`
     +(clamped?` · ${clamped} notes folded into the ±2-octave range`:''));
 }
@@ -1859,6 +1872,38 @@ function loadStored(){
   try{return deserialize(JSON.parse(localStorage.getItem(STORE_KEY)));}
   catch(e){return false;}
 }
+
+//// ---- undo / redo / edit history -------------------------------------------
+// snapshots reuse serialize(); a debounced recorder coalesces rapid edits
+// (e.g. a whole drag) into one history step. Selection isn't part of state.
+let history=[],ptr=-1,histLabel='edit',histTimer=null,lastRec=null;
+function markHistory(label){if(label)histLabel=label;clearTimeout(histTimer);histTimer=setTimeout(commitHistory,450);}
+function commitHistory(){
+  const state=JSON.stringify(serialize());
+  if(state===lastRec)return;
+  history=history.slice(0,ptr+1);
+  history.push({label:histLabel,state});
+  if(history.length>120)history.shift();
+  ptr=history.length-1;lastRec=state;histLabel='edit';
+  renderHistory();
+}
+function applyState(s){lastRec=s;deserialize(JSON.parse(s));render();}
+function undo(){if(ptr<=0){banner('nothing to undo');return;}clearTimeout(histTimer);ptr--;applyState(history[ptr].state);renderHistory();banner('undo · '+history[ptr].label);}
+function redo(){if(ptr>=history.length-1){banner('nothing to redo');return;}clearTimeout(histTimer);ptr++;applyState(history[ptr].state);renderHistory();banner('redo · '+history[ptr].label);}
+function jumpHistory(i){if(i<0||i>=history.length||i===ptr)return;clearTimeout(histTimer);ptr=i;applyState(history[i].state);renderHistory();}
+function renderHistory(){
+  const el=document.getElementById('histList');if(!el)return;
+  el.innerHTML='';
+  history.forEach((h,i)=>{
+    const d=document.createElement('div');
+    d.className='histitem'+(i===ptr?' cur':'')+(i>ptr?' future':'');
+    d.textContent=h.label;d.onclick=()=>jumpHistory(i);
+    el.appendChild(d);
+  });
+  el.scrollTop=Math.max(0,ptr*20-60);
+  const u=document.getElementById('undoBtn'),r=document.getElementById('redoBtn');
+  if(u)u.disabled=ptr<=0; if(r)r.disabled=ptr>=history.length-1;
+}
 document.getElementById('exportBtn').onclick=()=>{
   const blob=new Blob([JSON.stringify(serialize(),null,1)],{type:'application/json'});
   const a=document.createElement('a');
@@ -1888,7 +1933,7 @@ function loadPreset(key){
     PRESETS[key].forEach((r,i)=>{if(i===0)return;const iv=parseRatio(r);
       notes.push({id:nextId++,ratio:iv,parent:0,interval:iv,name:johnston(iv),salience:0.5,gamut:true});});
   }
-  selected.clear();seqAutoScroll=true;render();fitView();
+  selected.clear();seqAutoScroll=true;histLabel=key==='clear'?'clear':'preset: '+key;render();fitView();
 }
 // the classic syntonic comma pump: C - Am - Dm - G - C, every chord tuned as
 // pure 5-limit triads from the previous chord's notes. The "C" you come back
@@ -2125,13 +2170,14 @@ function buildSynthUI(){
     tr.innerHTML=`<td><input type="checkbox" data-k="on" ${o.on?'checked':''}></td>
       <td><select data-k="wave">${WAVES.map(w=>`<option ${o.wave===w?'selected':''}>${w}</option>`).join('')}</select></td>
       <td><select data-k="oct">${[-2,-1,0,1,2].map(v=>`<option value="${v}" ${o.oct===v?'selected':''}>${v>0?'+':''}${v}</option>`).join('')}</select></td>
-      <td><input type="number" data-k="detune" value="${o.detune}" step="1"></td>
+      <td><input type="text" data-k="ratio" value="${o.ratio.n}/${o.ratio.d}" title="detune as a just ratio: 1/1, 81/80 (comma), 33/32, 2/1 (octave)…"></td>
       <td><input type="range" data-k="level" min="0" max="1" step="0.01" value="${o.level}"></td>`;
     tr.querySelectorAll('[data-k]').forEach(el=>{
       const k=el.dataset.k,ev=(el.type==='checkbox'||el.tagName==='SELECT')?'change':'input';
       el.addEventListener(ev,()=>{
         if(k==='on')o.on=el.checked;
         else if(k==='wave')o.wave=el.value;
+        else if(k==='ratio'){const r=parseRatio(el.value);if(r)o.ratio=r;}
         else o[k]=+el.value;
         saveSynth();
       });
@@ -2149,8 +2195,18 @@ function buildSynthUI(){
 
 //// ---- go -----------------------------------------------------------------
 buildSynthUI();
+document.getElementById('undoBtn').onclick=undo;
+document.getElementById('redoBtn').onclick=redo;
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  const mod=e.ctrlKey||e.metaKey;if(!mod)return;
+  if((e.key==='z'||e.key==='Z')&&!e.shiftKey){e.preventDefault();undo();}
+  else if((e.key==='z'||e.key==='Z')&&e.shiftKey){e.preventDefault();redo();}
+  else if(e.key==='y'||e.key==='Y'){e.preventDefault();redo();}
+});
 if(loadStored()){render();fitView();}
 else loadPreset('major7');
+commitHistory();                                  // seed the initial state
 requestAnimationFrame(animate);
 </script>
 </body>
