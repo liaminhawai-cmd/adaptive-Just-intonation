@@ -109,6 +109,9 @@
   .rchip.on{opacity:1;color:var(--acc2);border-color:#3a4154}
   .rchip.cur{box-shadow:inset 0 0 0 1.5px var(--acc2)}
   .rchip:hover{opacity:1}
+  .toolgroup{display:inline-flex;gap:2px}
+  .tool{width:auto;padding:6px 9px;font-size:15px;opacity:.55}
+  .tool.on{opacity:1;color:var(--acc2);border-color:var(--acc2)}
   .seqgrid{flex:1;overflow:auto;position:relative}
   .lane{position:relative;height:24px;border-bottom:1px solid #20242f}
   .lane.src{background:#241f12}
@@ -300,13 +303,17 @@
       <button id="rhythmBtn" class="ghost" title="Rhythm map: choose the divisions notes snap to">𝅘𝅥𝅮 Rhythm</button>
       <span class="t" id="rchips" title="active snap divisions — click one to remove"></span>
       <button id="pumpBtn" class="ghost" title="Pump (Ctrl+B): duplicate the block after itself, then define the pivot — which copy note tunes from which previous-chord note, by which ratio. Preview before you commit.">⤵ Pump</button>
-      <button id="selBtn" class="ghost" title="Box-select mode: drag a rectangle to select notes (or hold shift/ctrl anytime)">⬚ Select</button>
+      <span class="toolgroup">
+        <button id="toolPencil" class="ghost tool" data-tool="pencil" title="Pencil (P) — draw notes; drag body to move, right edge to resize">✎</button>
+        <button id="toolTune" class="ghost tool" data-tool="tune" title="Tune (T) — click a note/lane to tune a new pitch from it">◎</button>
+        <button id="toolSelect" class="ghost tool" data-tool="select" title="Select (S) — drag a box to select notes">⬚</button>
+      </span>
       <span class="t">BPM</span><input id="bpm" type="number" value="100" min="20" max="300" step="1"/>
       <span class="t">bars</span><select id="seqBars"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select>
       <button id="seqZin" class="ghost" style="width:auto;padding:6px 8px" title="Zoom in">+</button>
       <button id="seqZout" class="ghost" style="width:auto;padding:6px 8px" title="Zoom out">−</button>
       <button id="seqClear" class="ghost">clear</button>
-      <span class="t seqlegend">✏️ empty lane = new note · <b>drag bar = move/retune</b> · right edge = length · right-click = delete / tune-from · shift+drag = select · Ctrl+C/V/B</span>
+      <span class="t seqlegend"><b>P</b>encil / <b>T</b>une / <b>S</b>elect tools · right-click bar = delete · right-click lane = tune-from · shift+drag = select · Ctrl+Z undo · Ctrl+C/V/B</span>
       <span class="seqbanner" id="seqBanner"></span>
     </div>
     <div class="seqgrid" id="seqgrid"></div>
@@ -1071,7 +1078,7 @@ function renderSeq(){
     html+=`</div>`;
   });
   grid.innerHTML=html;
-  // wire lanes (mousedown on empty area = add note at snapped time) and bars
+  // wire lanes. Left-click behaviour depends on the active tool.
   grid.querySelectorAll('.lane').forEach(l=>{
     l.addEventListener('mousedown',e=>{
       if(e.target!==l)return;                    // bars/labels handle their own
@@ -1079,8 +1086,9 @@ function renderSeq(){
       if(retune)return;
       if(place.on){commitPlace();return;}
       e.preventDefault();
-      if(selMode||e.shiftKey||e.ctrlKey||e.metaKey){startMarquee(e);return;}
       const id=+l.dataset.id,oct=+l.dataset.oct;
+      if(wantSelect(e)){startMarquee(e);return;}
+      if(tool==='tune'){startPlace(id,oct);return;} // tune tool: tune a new note from this lane
       const r=grid.getBoundingClientRect();
       const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
       const ts=timeSnap(xBars);if(!ts)return;
@@ -1091,7 +1099,7 @@ function renderSeq(){
       playLane(notes.find(n=>n.id===id),oct);
       renderSeq();
     });
-    l.addEventListener('contextmenu',e=>{
+    l.addEventListener('contextmenu',e=>{     // right-click always = quick tune-from
       if(e.target!==l)return;
       e.preventDefault();e.stopPropagation();startPlace(+l.dataset.id,+l.dataset.oct);
     });
@@ -1101,14 +1109,15 @@ function renderSeq(){
       e.preventDefault();e.stopPropagation();
       const h=hits[+b.dataset.i];if(!h)return;
       curDur=h.len;renderRChips();                    // touched note sets the current value
-      if(selMode||e.shiftKey||e.ctrlKey||e.metaKey){   // toggle selection
+      if(wantSelect(e)){                              // toggle selection
         if(seqSel.has(h))seqSel.delete(h);else seqSel.add(h);
         renderSeq();return;
       }
       if(retune){retuneClick(h);return;}
       if(pasteMode){dropPaste();return;}
       if(place.on){commitPlace();return;}
-      // right edge (last 8px of a wide bar) resizes length; body moves the note
+      if(tool==='tune'){startPlace(h.id,h.oct);return;} // tune a new note from this one
+      // pencil tool: right edge resizes length, body moves/retunes the note
       const br=b.getBoundingClientRect();
       const edge=br.width>=16&&(e.clientX>br.right-8);
       if(edge){
@@ -1394,13 +1403,20 @@ function openPivotPanel(origBlock,copies){
   document.getElementById('pivKeep').onclick=()=>{retune=null;closeTuneBox();banner('kept unison copy');render();};
 }
 document.getElementById('pumpBtn').onclick=pumpDuplicate;
-let selMode=false;
-document.getElementById('selBtn').onclick=function(){
-  selMode=!selMode;
-  this.classList.toggle('tgl',selMode);
-  grid.style.cursor=selMode?'crosshair':'';
-  banner(selMode?'box-select: drag a rectangle (shift = add to selection) · Esc exits':'');
-};
+// tools: pencil (draw), tune (tune-from), select (box). Shift/ctrl always
+// force select regardless of tool, matching DAW habits.
+let tool='pencil';
+const wantSelect=e=>tool==='select'||e.shiftKey||e.ctrlKey||e.metaKey;
+function setTool(t){
+  tool=t;
+  if(place.on&&t!=='tune')cancelPlace();
+  document.querySelectorAll('.tool').forEach(b=>b.classList.toggle('on',b.dataset.tool===t));
+  grid.style.cursor=t==='select'?'crosshair':(t==='tune'?'ns-resize':'default');
+  const msg={pencil:'✎ Pencil — draw notes',tune:'◎ Tune — click a note or lane to tune a new pitch from it',
+    select:'⬚ Select — drag a box (shift = add)'};
+  banner(msg[t]||'');
+}
+document.querySelectorAll('.tool').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
 document.getElementById('showCentsChk').checked=showCents;
 document.body.classList.toggle('cents',showCents);
 document.getElementById('showCentsChk').addEventListener('change',e=>{
@@ -2121,7 +2137,7 @@ document.addEventListener('keydown',e=>{
   if(pasteMode){pasteMode=null;drawPasteGhost();banner('paste cancelled');return;}
   if(retune){retune=null;closeTuneBox();banner('kept original tuning');renderSeq();return;}
   if(marquee){marquee=null;drawMarquee();return;}
-  if(selMode){selMode=false;document.getElementById('selBtn').classList.remove('tgl');grid.style.cursor='';return;}
+  if(tool!=='pencil'){setTool('pencil');return;}
   if(seqSel.size){seqSel.clear();renderSeq();return;}
   stopAllDrones();
 });
@@ -2232,11 +2248,20 @@ document.getElementById('undoBtn').onclick=undo;
 document.getElementById('redoBtn').onclick=redo;
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
-  const mod=e.ctrlKey||e.metaKey;if(!mod)return;
-  if((e.key==='z'||e.key==='Z')&&!e.shiftKey){e.preventDefault();undo();}
-  else if((e.key==='z'||e.key==='Z')&&e.shiftKey){e.preventDefault();redo();}
-  else if(e.key==='y'||e.key==='Y'){e.preventDefault();redo();}
+  const mod=e.ctrlKey||e.metaKey;
+  if(mod){
+    if((e.key==='z'||e.key==='Z')&&!e.shiftKey){e.preventDefault();undo();}
+    else if((e.key==='z'||e.key==='Z')&&e.shiftKey){e.preventDefault();redo();}
+    else if(e.key==='y'||e.key==='Y'){e.preventDefault();redo();}
+    return;
+  }
+  // tool hotkeys (no modifier)
+  const k=e.key.toLowerCase();
+  if(k==='p'){setTool('pencil');}
+  else if(k==='t'){setTool('tune');}
+  else if(k==='s'){setTool('select');}
 });
+setTool('pencil');
 if(loadStored()){render();fitView();}
 else loadPreset('major7');
 commitHistory();                                  // seed the initial state
