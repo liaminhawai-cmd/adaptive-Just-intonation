@@ -88,9 +88,15 @@
        width:560px;max-width:92vw;max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.6)}
   .modal h3{margin:0 0 4px;font-size:16px}
   .modal .sub{margin:0 0 14px}
-  .sysbtn{display:block;width:100%;text-align:left;margin:6px 0;padding:10px 12px;border-radius:9px}
-  .sysbtn.on{border-color:var(--acc2);background:#241f12}
+  .sysbtn{display:block;width:100%;text-align:left;margin:6px 0;padding:10px 12px;border-radius:9px;transition:border-color .1s,background .1s}
+  .sysbtn:hover{border-color:var(--acc);background:var(--panel2)}
+  .sysbtn.on{border-color:var(--acc2);background:#2a2413;box-shadow:0 0 0 1px var(--acc2) inset}
   .sysbtn b{color:var(--acc2)}
+  .buildtag{font-size:10px;color:var(--dim);font-weight:400;vertical-align:middle;margin-left:6px;
+       border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  .presetchips .chip{border-color:#3a4154;background:var(--panel2)}
+  .presetchips .chip:hover{border-color:var(--acc2);color:var(--acc2)}
+  #demoSel{border-color:var(--acc2);background:#221d10}
   .scalerow{font-variant-numeric:tabular-nums;font-size:11px;color:var(--dim);margin-top:5px;line-height:1.6}
   .scalerow span{display:inline-block;min-width:52px}
   .modalfoot{display:flex;gap:8px;margin-top:16px}
@@ -184,7 +190,7 @@
 </head>
 <body>
 <div class="side">
-  <h1>Lattice</h1>
+  <h1>Lattice <span id="build" class="buildtag"></span></h1>
   <p class="sub">A ratio-based just-intonation instrument with Ben&nbsp;Johnston notation. Colour = <b>consonance</b> with what's playing.</p>
 
   <h2>Reference</h2>
@@ -235,12 +241,27 @@
     IAC Driver on Mac) into FL Studio. <b>Mono</b> mode bends one channel per note — plays one line at a
     time correctly on any synth. Set your synth's pitch-bend range to match the field above (2 is the default).</p>
 
-  <h2>Presets</h2>
-  <div class="chips">
+  <h2>Demos <span class="muted">— hear it in JI</span></h2>
+  <label>Load a demo (public-domain tunes &amp; comma pumps)</label>
+  <select id="demoSel">
+    <option value="">— choose a demo —</option>
+    <optgroup label="Melodies (drone the root, then ▶ Play)">
+      <option value="ode">Beethoven · Ode to Joy</option>
+      <option value="twinkle">Mozart · Twinkle / Ah vous dirai-je</option>
+      <option value="frere">Frère Jacques (round)</option>
+      <option value="amazing">Amazing Grace (pentatonic)</option>
+    </optgroup>
+    <optgroup label="Chords / comma pumps">
+      <option value="pump">Syntonic comma pump (I–vi–ii–V–I)</option>
+      <option value="blues">12-bar blues turnaround (7-limit)</option>
+    </optgroup>
+  </select>
+
+  <h2>Scale presets</h2>
+  <div class="chips presetchips">
     <button class="chip ghost" data-preset="major7">7-note JI major</button>
     <button class="chip ghost" data-preset="penta5">5-note pentatonic</button>
     <button class="chip ghost" data-preset="harm7">7-limit (harmonic 7th)</button>
-    <button class="chip ghost" data-preset="pump" title="I–vi–ii–V–I with every chord tuned pure: the key drifts down 81/80. Press play.">comma pump demo</button>
     <button class="chip ghost" data-preset="clear">clear</button>
   </div>
 
@@ -321,6 +342,7 @@
 </div>
 
 <script>
+const BUILD=27;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -342,6 +364,12 @@ let showCents=false;
 try{showCents=JSON.parse(localStorage.getItem('lattice-ui')||'{}').showCents||false;}catch(e){}
 const CENTS=(v,pre=' · ')=>showCents?pre+(v>0?'':'')+v.toFixed(1)+'¢':'';
 function octReduce(f){let n=f.n,d=f.d;while(n/d>=2)d*=2;while(n/d<1)n*=2;return fr(n,d);}
+// reduce a shift factor to the nearest unison (|cents|≤600) so a pivot moves the
+// block JUST ENOUGH to establish the pitch-class relationship, never by octaves
+function nearestUnison(f){let c=cents(f);
+  while(c>600){f=fr(f.n,f.d*2);c=cents(f);}
+  while(c<-600){f=fr(f.n*2,f.d);c=cents(f);}
+  return f;}
 
 //// ---- consonance: Tenney harmonic distance -------------------------------
 function intervalHD(a,b){const i=div(a,b);return log2(i.n*i.d);}
@@ -1741,7 +1769,9 @@ function openTuneBox(P,A,presetR){
     <button id="tuneCancel" class="ghost">← back</button>`;
   document.getElementById('seq').appendChild(box);
   const factor=()=>{const r=parseRatio(document.getElementById('tuneRatio').value);
-    if(!r)return null;return {r,f:div(mul(hitAbsRatio(A),r),hitAbsRatio(P))};};
+    if(!r)return null;
+    // shift so P's pitch class sits r from A's, moving the block minimally
+    return {r,f:nearestUnison(div(mul(hitAbsRatio(A),r),hitAbsRatio(P)))};};
   const playChordAt=(list,fac,t,vol)=>list.forEach(h=>{const n=notes.find(x=>x.id===h.id);
     if(n)playFreq(laneFreq(n,h.oct)*fac,t,0.85,vol);});
   // preview BEFORE→AFTER: the previous chord (the one holding the anchor A), as-is,
@@ -2057,6 +2087,64 @@ function loadPump(){
   selected.clear();seqAutoScroll=true;render();fitView();
 }
 
+//// ---- demos (public-domain melodies + comma pumps) -------------------------
+// each seq event = [ratioString(pitch class) | null(rest), startSixteenth, durSixteenth, oct?]
+// ratios are just-intonation scale degrees relative to C=1/1.
+const _C=1,dg={C:'1/1',D:'9/8',E:'5/4',F:'4/3',G:'3/2',A:'5/3',B:'15/8',Bb:'16/9',Eb:'6/5',Fs:'45/32'};
+function m(deg,start,dur,oct){return [dg[deg],start,dur,oct||0];}
+const DEMOS={
+  ode:{bpm:120,seq:[ // Ode to Joy, C major
+    m('E',0,4),m('E',4,4),m('F',8,4),m('G',12,4), m('G',16,4),m('F',20,4),m('E',24,4),m('D',28,4),
+    m('C',32,4),m('C',36,4),m('D',40,4),m('E',44,4), m('E',48,6),m('D',54,2),m('D',56,8)]},
+  twinkle:{bpm:112,seq:[
+    m('C',0,4),m('C',4,4),m('G',8,4),m('G',12,4), m('A',16,4),m('A',20,4),m('G',24,8),
+    m('F',32,4),m('F',36,4),m('E',40,4),m('E',44,4), m('D',48,4),m('D',52,4),m('C',56,8)]},
+  frere:{bpm:104,seq:[
+    m('C',0,4),m('D',4,4),m('E',8,4),m('C',12,4), m('C',16,4),m('D',20,4),m('E',24,4),m('C',28,4),
+    m('E',32,4),m('F',36,4),m('G',40,8), m('E',48,4),m('F',52,4),m('G',56,8)]},
+  amazing:{bpm:80,seq:[ // Amazing Grace (major pentatonic-ish), pickup + phrase
+    m('G',0,4,-1),m('C',4,8),m('E',12,2),m('C',14,2), m('E',16,8),m('D',24,4),m('C',28,4),
+    m('A',32,8,-1),m('G',40,8,-1), m('C',48,16)]},
+};
+function loadDemo(key){
+  if(key==='pump'){loadPump();return;}
+  if(key==='blues'){loadBlues();return;}
+  const d=DEMOS[key];if(!d)return;
+  addRoot();hits=[];pumpState={blockStart:0};
+  document.getElementById('bpm').value=d.bpm;
+  const pcId={};
+  const ensure=rstr=>{const r=octReduce(parseRatio(rstr)),k=r.n+'/'+r.d;
+    if(k==='1/1')return 0;
+    if(pcId[k]!=null)return pcId[k];
+    const ex=notes.find(n=>eqf(n.ratio,r));if(ex){ex.gamut=true;pcId[k]=ex.id;return ex.id;}
+    const id=nextId++;notes.push({id,ratio:r,parent:0,interval:r,name:'',salience:.5,gamut:true});pcId[k]=id;return id;};
+  let maxEnd=0;
+  d.seq.forEach(ev=>{if(!ev[0])return;
+    const id=ensure(ev[0]);
+    hits.push({id,oct:ev[3]||0,start:fr(ev[1],16),len:fr(ev[2],16),div:'1/16'});
+    maxEnd=Math.max(maxEnd,ev[1]+ev[2]);});
+  setBars(Math.max(1,Math.ceil(maxEnd/16-1e-9)));
+  selected.clear();seqAutoScroll=true;histLabel='demo: '+key;render();fitView();
+  banner('loaded demo — shift-click the root to drone it, then ▶ Play. Compare with a 12-TET synth to hear the difference.');
+}
+// 12-bar-ish blues turnaround with 7-limit dominant 7ths
+function loadBlues(){
+  addRoot();hits=[];pumpState={blockStart:0};
+  document.getElementById('bpm').value=100;
+  const add=(nn,dd)=>{const r=octReduce(fr(nn,dd));const ex=notes.find(x=>eqf(x.ratio,r));
+    if(ex){ex.gamut=true;return ex.id;}const id=nextId++;notes.push({id,ratio:r,parent:0,interval:r,name:'',salience:.5,gamut:true});return id;};
+  // C7, F7, G7 as 4:5:6:7 dominant sevenths on C(1/1), F(4/3), G(3/2)
+  const chord=(root,bar)=>{const rs=[root,mul(root,fr(5,4)),mul(root,fr(3,2)),mul(root,fr(7,4))];
+    rs.forEach(rr=>{const pc=octReduce(rr);const id=add(pc.n,pc.d);
+      let oct=Math.round((cents(rr)-cents(pc))/1200);oct=Math.max(-2,Math.min(2,oct));
+      hits.push({id,oct,start:fr(bar,1),len:fr(1,1),div:'1/1'});});};
+  chord(fr(1,1),0);chord(fr(1,1),1);chord(fr(4,3),2);chord(fr(1,1),3);
+  chord(fr(3,2),4);chord(fr(4,3),5);chord(fr(1,1),6);chord(fr(3,2),7);  // I I IV I  V IV I V
+  setBars(8);selected.clear();seqAutoScroll=true;histLabel='demo: blues';render();fitView();
+  banner('12-bar blues turnaround with pure 4:5:6:7 dominant 7ths — the 7/4 sevenths are the "blue" notes.');
+}
+document.getElementById('demoSel').addEventListener('change',e=>{if(e.target.value){loadDemo(e.target.value);e.target.value='';}});
+
 //// ---- wiring -------------------------------------------------------------
 document.getElementById('add').onclick=()=>{
   const pid=parseInt(document.getElementById('parent').value,10);
@@ -2265,8 +2353,9 @@ window.__t={genCandidates,intervalHD,consonanceColor,johnston,fr,mul,cents,snapP
 function buildSynthUI(){
   const vol=document.getElementById('synVol');vol.value=synth.vol;
   vol.oninput=()=>{synth.vol=+vol.value;
-    if(master){if(synth.vol<=0){master.gain.cancelScheduledValues(ac.currentTime);master.gain.setValueAtTime(0,ac.currentTime);}
-      else master.gain.setTargetAtTime(synth.vol,ac.currentTime,0.01);}
+    if(master){const t=ac.currentTime;master.gain.cancelScheduledValues(t);
+      master.gain.setValueAtTime(master.gain.value,t);
+      master.gain.linearRampToValueAtTime(synth.vol,t+0.02);}  // reaches exactly 0 at the bottom
     saveSynth();};
   const tb=document.getElementById('oscRows');tb.innerHTML='';
   synth.osc.forEach((o,i)=>{
@@ -2298,6 +2387,8 @@ function buildSynthUI(){
 }
 
 //// ---- go -----------------------------------------------------------------
+document.getElementById('build').textContent='build '+BUILD;
+console.log('Lattice build '+BUILD);
 buildSynthUI();
 document.getElementById('undoBtn').onclick=undo;
 document.getElementById('redoBtn').onclick=redo;
