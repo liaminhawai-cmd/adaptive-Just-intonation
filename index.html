@@ -265,8 +265,14 @@
     </optgroup>
     <optgroup label="Jazz / blues + comma pumps">
       <option value="jazz251">Jazz ii–V–I (tuned, pump it!)</option>
+      <option value="rhythm">Rhythm changes A (I–vi–ii–V ×2)</option>
       <option value="blues">12-bar blues (7-limit dom7s)</option>
       <option value="pump">Syntonic comma pump I–vi–ii–V–I</option>
+    </optgroup>
+    <optgroup label="JI special effects">
+      <option value="giant">Major-third cycle (Coltrane changes / diesis spiral)</option>
+      <option value="harmonic">Harmonic-series 13th chord (extended = smooth)</option>
+      <option value="commaline">Comma-modulation line (81/80 staircase)</option>
     </optgroup>
   </select>
 
@@ -356,7 +362,7 @@
 </div>
 
 <script>
-const BUILD=29;   // bump every deploy so you can confirm you're on the latest
+const BUILD=30;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -2188,8 +2194,45 @@ const DEMOS={
     m('C',0,4),m('E',4,4),m('F',8,4),m('G',12,12), m('C',24,4),m('E',28,4),m('F',32,4),m('G',36,12),
     m('C',48,4),m('E',52,4),m('F',56,4),m('G',60,4)]},
 };
+// extended-jazz consonance: a 13th chord voiced straight from the harmonic
+// series (8:9:10:11:12:13) — silky in JI, harsh in 12-TET — then a bare octave
+// to contrast. Shows why "tall" chords like sound so smooth tuned justly.
+function loadHarmonic(){
+  addRoot();hits=[];pumpState={blockStart:0};
+  document.getElementById('bpm').value=70;
+  const add=r=>{const pc=octReduce(r);const ex=notes.find(x=>eqf(x.ratio,pc));
+    if(ex){ex.gamut=true;return ex.id;}const id=nextId++;notes.push({id,ratio:pc,parent:0,interval:pc,name:'',salience:.5,gamut:true});return id;};
+  // harmonics 8..13 over a low root: 8/8,9/8,10/8,11/8,12/8,13/8 (root, 9th, 3rd, 11th, 5th, 13th)
+  const parts=[[1,1,-1],[9,8,0],[5,4,0],[11,8,0],[3,2,0],[13,8,0]];
+  parts.forEach(([n,dd,oct])=>{const id=add(fr(n,dd));hits.push({id,oct,start:fr(0,1),len:fr(3,1),div:'1/1'});});
+  const rid=add(fr(1,1));hits.push({id:rid,oct:-1,start:fr(3,1),len:fr(1,1),div:'1/1'});
+  hits.push({id:rid,oct:0,start:fr(3,1),len:fr(1,1),div:'1/1'});
+  setBars(4);selected.clear();seqAutoScroll=true;histLabel='demo: harmonic';render();fitView();
+  banner('An 8:9:10:11:12:13 "13th chord" straight from the harmonic series — extended chords are SMOOTH in JI where 12-TET makes them clash. The 11/8 and 13/8 are the exotic colours.');
+}
+// original demonstration (not any specific copyrighted piece): a phrase that
+// modulates down by a syntonic comma each repeat — extended-JI comma motion.
+function loadCommaLine(){
+  addRoot();hits=[];pumpState={blockStart:0};
+  document.getElementById('bpm').value=84;
+  const add=r=>{const pc=octReduce(r);const ex=notes.find(x=>eqf(x.ratio,pc));
+    if(ex){ex.gamut=true;return ex.id;}const id=nextId++;notes.push({id,ratio:pc,parent:0,interval:pc,name:'',salience:.5,gamut:true});return id;};
+  // C E G, then reach a new C as (5/3)*(4/5)= 4/3... build a descending comma chain:
+  // each phrase: root, its 5/4, its 3/2, then the next root is a pure 4/3 under the 3rd → drifts −81/80
+  let root=fr(1,1);
+  for(let ph=0;ph<4;ph++){
+    [[1,1],[5,4],[3,2],[5,4]].forEach(([a,b],i)=>{const r=mul(root,fr(a,b));const pc=octReduce(r);
+      const id=add(pc);let oct=Math.round((cents(r)-cents(pc))/1200);oct=Math.max(-2,Math.min(2,oct));
+      hits.push({id,oct,start:fr(ph*4+i,4),len:fr(1,4),div:'1/4'});});
+    root=octReduce(mul(root,fr(80,81)));   // next phrase a syntonic comma lower
+  }
+  setBars(4);selected.clear();seqAutoScroll=true;histLabel='demo: comma line';render();fitView();
+  banner('An original line that slips a syntonic comma (81/80) lower each phrase — the kind of comma modulation extended-JI composers explore. Watch the amber comma links stack on the lattice.');
+}
 function loadDemo(key){
   if(key==='pump'){loadPump();return;}
+  if(key==='harmonic'){loadHarmonic();return;}
+  if(key==='commaline'){loadCommaLine();return;}
   if(CHORD_DEMOS[key]){const d=CHORD_DEMOS[key];buildChordDemo(d.prog,d.bpm,d.msg,key);return;}
   const d=DEMOS[key];if(!d)return;
   addRoot();hits=[];pumpState={blockStart:0};
@@ -2215,32 +2258,40 @@ const CHORD_TYPES={
   dom7:['1/1','5/4','3/2','7/4'], maj7:['1/1','5/4','3/2','15/8'],
   min7:['1/1','6/5','3/2','9/5'], m7b5:['1/1','6/5','7/5','9/5'],
 };
+// choose the inversion + register that keeps top & bottom voices closest to the
+// previous chord, and stays compact. Returns {voices:[{ti,oct}], bottom, top} in cents.
+function voiceLead(toneR,prev){
+  const n=toneR.length,tc=toneR.map(r=>cents(r));   // pitch-class cents in [0,1200)
+  let best=null,bs=1e9;
+  for(let inv=0;inv<n;inv++)for(let baseOct=-2;baseOct<=1;baseOct++){
+    const voices=[];let prevC=-1e9;
+    for(let k=0;k<n;k++){const ti=(inv+k)%n;let oct=baseOct,c=tc[ti]+1200*oct;
+      while(c<=prevC){c+=1200;oct++;}prevC=c;voices.push({ti,oct,c});}
+    const bottom=voices[0].c,top=voices[n-1].c;
+    let score=prev?Math.abs(bottom-prev.bottom)+Math.abs(top-prev.top)
+                  :Math.abs(bottom-(-300))+Math.abs(top-900);  // first chord: comfortable register
+    if(top-bottom>1500)score+=(top-bottom-1500)*0.6;           // discourage very wide spreads
+    if(score<bs){bs=score;best={voices,bottom,top};}
+  }
+  return best;
+}
 function buildChordDemo(prog,bpm,msg,key){
   addRoot();hits=[];pumpState={blockStart:0};
   document.getElementById('bpm').value=bpm;
   const add=r=>{const pc=octReduce(r);const ex=notes.find(x=>eqf(x.ratio,pc));
     if(ex){ex.gamut=true;return {id:ex.id,pc};}
     const id=nextId++;notes.push({id,ratio:pc,parent:0,interval:pc,name:'',salience:.5,gamut:true});return {id,pc};};
-  // voice each chord as a low bass (root, oct −1) plus a spread upper structure
-  // in oct 0, choosing the octave of each tone to keep the top voice moving
-  // smoothly (inversion by voice-leading) — cleaner sound, richer tuning play.
-  let prevTop=null;
+  // voice each chord by choosing the inversion that minimises motion of BOTH
+  // the top and bottom voices from the previous chord (compact voice-leading),
+  // plus a root bass an octave below. Small jumps, good sound, richer tuning.
+  let prev=null;
   prog.forEach(([rs,type,bar,len])=>{
     const root=parseRatio(rs);
-    const push=(id,oct)=>hits.push({id,oct,start:fr(bar,1),len:fr(len||1,1),div:'1/1'});
-    // bass
-    const {id:bid}=add(root);push(bid,-1);
-    // upper voices, each placed near the previous chord's soprano
-    const tones=(CHORD_TYPES[type]||CHORD_TYPES.maj).map(iv=>octReduce(mul(root,parseRatio(iv))));
-    let top=null;
-    tones.forEach(pc=>{const {id}=add(pc);
-      let oct=0,c=cents(pc)+1200*oct;
-      if(prevTop!=null){                      // nudge into the octave nearest last soprano
-        while(c-prevTop>600&&oct>-2){oct--;c-=1200;}
-        while(prevTop-c>600&&oct<2){oct++;c+=1200;}
-      }
-      push(id,oct);if(top==null||c>top)top=c;});
-    prevTop=top;
+    const push=(id,oct)=>hits.push({id,oct:Math.max(-2,Math.min(2,oct)),start:fr(bar,1),len:fr(len||1,1),div:'1/1'});
+    const toneR=(CHORD_TYPES[type]||CHORD_TYPES.maj).map(iv=>octReduce(mul(root,parseRatio(iv))));
+    const vl=voiceLead(toneR,prev);prev={bottom:vl.bottom,top:vl.top};
+    vl.voices.forEach(v=>{const {id}=add(toneR[v.ti]);push(id,v.oct);});
+    const {id:bid}=add(octReduce(root));push(bid,Math.round(vl.bottom/1200)-1); // root bass below
   });
   const maxBar=Math.max(...prog.map(c=>c[2]+(c[3]||1)));
   setBars(Math.max(1,Math.ceil(maxBar)));
@@ -2262,6 +2313,12 @@ const CHORD_DEMOS={
     prog:[['1/1','dom7',0],['1/1','dom7',1],['1/1','dom7',2],['1/1','dom7',3],
           ['4/3','dom7',4],['4/3','dom7',5],['1/1','dom7',6],['1/1','dom7',7],
           ['3/2','dom7',8],['4/3','dom7',9],['1/1','dom7',10],['3/2','dom7',11]]},
+  giant:{bpm:130,msg:'Major-third cycle (the "Coltrane changes" device). Three pure 5/4 thirds C→E→A♭→C fall SHORT of the octave by the 128/125 diesis (~41¢) — in JI the spiral never closes. Pump it to ride the spiral.',
+    prog:[['1/1','maj7',0],['6/5','dom7',1],['8/5','maj7',2],['15/8','dom7',3],
+          ['5/4','maj7',4],['3/2','dom7',5],['1/1','maj7',6,2]]},
+  rhythm:{bpm:150,msg:'Rhythm-changes A-section I–vi–ii–V ×2 (jazz\'s most-used turnaround). Loops beautifully and drifts by a syntonic comma when tuned pure — pump it.',
+    prog:[['1/1','maj7',0],['5/3','dom7',0.5,0.5],['10/9','min7',1],['3/2','dom7',1.5,0.5],
+          ['1/1','maj7',2],['5/3','dom7',2.5,0.5],['10/9','min7',3],['3/2','dom7',3.5,0.5]]},
 };
 document.getElementById('demoSel').addEventListener('change',e=>{if(e.target.value){loadDemo(e.target.value);e.target.value='';}});
 
