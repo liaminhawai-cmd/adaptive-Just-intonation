@@ -249,11 +249,20 @@
       <option value="ode">Beethoven · Ode to Joy</option>
       <option value="twinkle">Mozart · Twinkle / Ah vous dirai-je</option>
       <option value="frere">Frère Jacques (round)</option>
-      <option value="amazing">Amazing Grace (pentatonic)</option>
+      <option value="amazing">Amazing Grace</option>
+      <option value="jingle">Jingle Bells</option>
+      <option value="saints">When the Saints Go Marching In</option>
     </optgroup>
-    <optgroup label="Chords / comma pumps">
-      <option value="pump">Syntonic comma pump (I–vi–ii–V–I)</option>
-      <option value="blues">12-bar blues turnaround (7-limit)</option>
+    <optgroup label="Pop / rock progressions (pure triads)">
+      <option value="pop4">Pop I–V–vi–IV (the "four chords")</option>
+      <option value="fifties">50s doo-wop I–vi–IV–V</option>
+      <option value="andalusian">Andalusian cadence i–VII–VI–V</option>
+      <option value="pachelbel">Pachelbel’s Canon progression</option>
+    </optgroup>
+    <optgroup label="Jazz / blues + comma pumps">
+      <option value="jazz251">Jazz ii–V–I (tuned, pump it!)</option>
+      <option value="blues">12-bar blues (7-limit dom7s)</option>
+      <option value="pump">Syntonic comma pump I–vi–ii–V–I</option>
     </optgroup>
   </select>
 
@@ -342,7 +351,7 @@
 </div>
 
 <script>
-const BUILD=27;   // bump every deploy so you can confirm you're on the latest
+const BUILD=28;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -2105,10 +2114,16 @@ const DEMOS={
   amazing:{bpm:80,seq:[ // Amazing Grace (major pentatonic-ish), pickup + phrase
     m('G',0,4,-1),m('C',4,8),m('E',12,2),m('C',14,2), m('E',16,8),m('D',24,4),m('C',28,4),
     m('A',32,8,-1),m('G',40,8,-1), m('C',48,16)]},
+  jingle:{bpm:120,seq:[ // Jingle Bells, C major
+    m('E',0,4),m('E',4,4),m('E',8,8), m('E',16,4),m('E',20,4),m('E',24,8),
+    m('E',32,4),m('G',36,4),m('C',40,6),m('D',44,2),m('E',48,16)]},
+  saints:{bpm:110,seq:[ // When the Saints Go Marching In, C major
+    m('C',0,4),m('E',4,4),m('F',8,4),m('G',12,12), m('C',24,4),m('E',28,4),m('F',32,4),m('G',36,12),
+    m('C',48,4),m('E',52,4),m('F',56,4),m('G',60,4)]},
 };
 function loadDemo(key){
   if(key==='pump'){loadPump();return;}
-  if(key==='blues'){loadBlues();return;}
+  if(CHORD_DEMOS[key]){const d=CHORD_DEMOS[key];buildChordDemo(d.prog,d.bpm,d.msg,key);return;}
   const d=DEMOS[key];if(!d)return;
   addRoot();hits=[];pumpState={blockStart:0};
   document.getElementById('bpm').value=d.bpm;
@@ -2127,22 +2142,44 @@ function loadDemo(key){
   selected.clear();seqAutoScroll=true;histLabel='demo: '+key;render();fitView();
   banner('loaded demo — shift-click the root to drone it, then ▶ Play. Compare with a 12-TET synth to hear the difference.');
 }
-// 12-bar-ish blues turnaround with 7-limit dominant 7ths
-function loadBlues(){
+// chord-progression demos. prog = [[rootRatioStr, type, bar, lenBars], …]
+const CHORD_TYPES={
+  maj:['1/1','5/4','3/2'], min:['1/1','6/5','3/2'], dim:['1/1','6/5','7/5'],
+  dom7:['1/1','5/4','3/2','7/4'], maj7:['1/1','5/4','3/2','15/8'],
+  min7:['1/1','6/5','3/2','9/5'], m7b5:['1/1','6/5','7/5','9/5'],
+};
+function buildChordDemo(prog,bpm,msg,key){
   addRoot();hits=[];pumpState={blockStart:0};
-  document.getElementById('bpm').value=100;
-  const add=(nn,dd)=>{const r=octReduce(fr(nn,dd));const ex=notes.find(x=>eqf(x.ratio,r));
-    if(ex){ex.gamut=true;return ex.id;}const id=nextId++;notes.push({id,ratio:r,parent:0,interval:r,name:'',salience:.5,gamut:true});return id;};
-  // C7, F7, G7 as 4:5:6:7 dominant sevenths on C(1/1), F(4/3), G(3/2)
-  const chord=(root,bar)=>{const rs=[root,mul(root,fr(5,4)),mul(root,fr(3,2)),mul(root,fr(7,4))];
-    rs.forEach(rr=>{const pc=octReduce(rr);const id=add(pc.n,pc.d);
-      let oct=Math.round((cents(rr)-cents(pc))/1200);oct=Math.max(-2,Math.min(2,oct));
-      hits.push({id,oct,start:fr(bar,1),len:fr(1,1),div:'1/1'});});};
-  chord(fr(1,1),0);chord(fr(1,1),1);chord(fr(4,3),2);chord(fr(1,1),3);
-  chord(fr(3,2),4);chord(fr(4,3),5);chord(fr(1,1),6);chord(fr(3,2),7);  // I I IV I  V IV I V
-  setBars(8);selected.clear();seqAutoScroll=true;histLabel='demo: blues';render();fitView();
-  banner('12-bar blues turnaround with pure 4:5:6:7 dominant 7ths — the 7/4 sevenths are the "blue" notes.');
+  document.getElementById('bpm').value=bpm;
+  const add=r=>{const pc=octReduce(r);const ex=notes.find(x=>eqf(x.ratio,pc));
+    if(ex){ex.gamut=true;return {id:ex.id,pc};}
+    const id=nextId++;notes.push({id,ratio:pc,parent:0,interval:pc,name:'',salience:.5,gamut:true});return {id,pc};};
+  prog.forEach(([rs,type,bar,len])=>{
+    const root=parseRatio(rs);(CHORD_TYPES[type]||CHORD_TYPES.maj).forEach(iv=>{
+      const r=mul(root,parseRatio(iv));const {id,pc}=add(r);
+      let oct=Math.round((cents(r)-cents(pc))/1200);oct=Math.max(-2,Math.min(2,oct));
+      hits.push({id,oct,start:fr(bar,1),len:fr(len||1,1),div:'1/1'});});});
+  const maxBar=Math.max(...prog.map(c=>c[2]+(c[3]||1)));
+  setBars(Math.max(1,Math.ceil(maxBar)));
+  selected.clear();seqAutoScroll=true;histLabel='demo: '+key;render();fitView();banner(msg);
 }
+const CHORD_DEMOS={
+  pop4:{bpm:96,msg:'Pop I–V–vi–IV, every triad pure 4:5:6. The most-used loop in modern pop, in JI.',
+    prog:[['1/1','maj',0],['3/2','maj',1],['5/3','min',2],['4/3','maj',3]]},
+  fifties:{bpm:88,msg:'50s doo-wop I–vi–IV–V (Stand By Me etc.), pure triads.',
+    prog:[['1/1','maj',0],['5/3','min',1],['4/3','maj',2],['3/2','maj',3]]},
+  jazz251:{bpm:120,msg:'Jazz ii–V–I with a justly-tuned ii (10/9 minor tone) and 7-limit sevenths. Pump it with different pivots to explore where the tuning wants to drift.',
+    prog:[['10/9','min7',0],['3/2','dom7',1],['1/1','maj7',2,2]]},
+  andalusian:{bpm:104,msg:'Andalusian cadence i–VII–VI–V (flamenco / "Hit the Road Jack"), minor triads + dominant.',
+    prog:[['1/1','min',0],['16/9','maj',1],['8/5','maj',2],['3/2','dom7',3]]},
+  pachelbel:{bpm:80,msg:'Pachelbel’s Canon progression I–V–vi–iii–IV–I–IV–V — a JI staple, all pure triads.',
+    prog:[['1/1','maj',0],['3/2','maj',1],['5/3','min',2],['5/4','min',3],
+          ['4/3','maj',4],['1/1','maj',5],['4/3','maj',6],['3/2','dom7',7]]},
+  blues:{bpm:100,msg:'12-bar blues with pure 4:5:6:7 dominant 7ths — the 7/4 sevenths are the "blue" notes.',
+    prog:[['1/1','dom7',0],['1/1','dom7',1],['1/1','dom7',2],['1/1','dom7',3],
+          ['4/3','dom7',4],['4/3','dom7',5],['1/1','dom7',6],['1/1','dom7',7],
+          ['3/2','dom7',8],['4/3','dom7',9],['1/1','dom7',10],['3/2','dom7',11]]},
+};
 document.getElementById('demoSel').addEventListener('change',e=>{if(e.target.value){loadDemo(e.target.value);e.target.value='';}});
 
 //// ---- wiring -------------------------------------------------------------
