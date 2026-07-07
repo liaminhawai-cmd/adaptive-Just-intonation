@@ -1672,19 +1672,25 @@ function openTuneBox(P,A,presetR){
   box.className='tunebox';box.id='tunebox';
   box.innerHTML=`<span><b>${nameOf(nP)}${4+P.oct}</b> from <b>${nameOf(nA)}${4+A.oct}</b> by</span>
     <input id="tuneRatio" value="${def}"/>
-    <button id="tunePrev" class="ghost">▶ hear</button>
+    <button id="tunePrev" class="ghost" title="hear the previous chord, then the copy at this tuning">▶ before→after</button>
     <button id="tuneApply" class="primary">Apply</button>
     <button id="tuneCancel" class="ghost">cancel</button>`;
   document.getElementById('seq').appendChild(box);
   const factor=()=>{const r=parseRatio(document.getElementById('tuneRatio').value);
     if(!r)return null;return {r,f:div(mul(hitAbsRatio(A),r),hitAbsRatio(P))};};
-  // preview: play the copy/paste block's first-onset chord at the proposed tuning
+  const playChordAt=(list,fac,t,vol)=>list.forEach(h=>{const n=notes.find(x=>x.id===h.id);
+    if(n)playFreq(laneFreq(n,h.oct)*fac,t,0.85,vol);});
+  // preview BEFORE→AFTER: the previous chord (the one holding the anchor A), as-is,
+  // then the copy's pivot chord at the proposed tuning, so you hear the move.
   const preview=()=>{const fx=factor();if(!fx)return;
-    const cop=[...retune.pasted],minS=Math.min(...cop.map(h=>frv(h.start)));
-    const chord=cop.filter(h=>Math.abs(frv(h.start)-minS)<1e-6);
     const t=audio().currentTime;
-    chord.forEach(h=>{const n=notes.find(x=>x.id===h.id);
-      if(n)playFreq(laneFreq(n,h.oct)*(fx.f.n/fx.f.d),t,0.8,0.16);});};
+    const aStart=frv(A.start);
+    const srcChord=hits.filter(h=>!retune.pasted.has(h)&&Math.abs(frv(h.start)-aStart)<1e-6);
+    const pStart=frv(P.start);
+    const copChord=[...retune.pasted].filter(h=>Math.abs(frv(h.start)-pStart)<1e-6);
+    playChordAt(srcChord.length?srcChord:[A],1,t,0.15);                    // before
+    playChordAt(copChord.length?copChord:[P],fx.f.n/fx.f.d,t+1.0,0.16);   // after
+  };
   const apply=()=>{const fx=factor();
     if(!fx){banner('invalid ratio — n/d like 6/5');return;}
     if(!eqf(fx.f,fr(1,1)))retuneBlock([...retune.pasted],fx.f);
