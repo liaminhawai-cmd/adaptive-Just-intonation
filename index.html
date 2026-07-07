@@ -1136,6 +1136,8 @@ function renderSeq(){
       const h=hits[+b.dataset.i];
       seqSel.delete(h);hits.splice(+b.dataset.i,1);renderSeq();
     });
+    b.addEventListener('mouseenter',()=>{if(pivotCtx)drawPivotHover(hits[+b.dataset.i]);});
+    b.addEventListener('mouseleave',()=>{if(pivotCtx)clearPivotHover();});
   });
   grid.querySelectorAll('.lanelbl').forEach(l=>{
     l.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();startPlace(+l.dataset.id,+l.dataset.oct);});
@@ -1368,39 +1370,86 @@ function pumpDuplicate(){
   hits.push(...copies);
   pumpState.blockStart=bs+blockLen;
   if(seq.playing)seq.loopBars=BARS;
-  retune={pasted:new Set(copies)};
-  histLabel='pump';render();
-  openPivotPanel(block,copies);
+  histLabel='pump';
+  enterPivot(copies,'pump');
 }
-// suggestions + preview panel shown after a pump duplicate
-function openPivotPanel(origBlock,copies){
-  closeTuneBox();
-  const oLast=Math.max(...origBlock.map(h=>frv(h.start)));
-  const lastChord=origBlock.filter(h=>Math.abs(frv(h.start)-oLast)<1e-6);
+// the previous chord before a copy block: latest onset among non-copy hits
+function pivotSourceChord(copiesSet,copies){
+  const cStart=Math.min(...copies.map(h=>frv(h.start)));
+  const prior=hits.filter(h=>!copiesSet.has(h)&&frv(h.start)<cStart-1e-9);
+  if(!prior.length)return [];
+  const last=Math.max(...prior.map(h=>frv(h.start)));
+  return prior.filter(h=>Math.abs(frv(h.start)-last)<1e-6);
+}
+// both pump and paste enter this: the copy exists at unison; you choose to keep
+// it unison or tune it from the previous chord (with preview). Re-openable.
+let pivotCtx=null;
+function enterPivot(copies,kind){
+  const set=new Set(copies);
+  retune={pasted:set};
   const cFirst=Math.min(...copies.map(h=>frv(h.start)));
-  const firstChord=copies.filter(h=>Math.abs(frv(h.start)-cFirst)<1e-6);
+  pivotCtx={copies,set,kind,
+    firstChord:copies.filter(h=>Math.abs(frv(h.start)-cFirst)<1e-6),
+    srcChord:pivotSourceChord(set,copies)};
+  render();
+  openPivotPanel();
+}
+function openPivotPanel(){
+  if(!pivotCtx)return;
+  closeTuneBox();
+  const {firstChord,srcChord,kind}=pivotCtx;
   const sugg=[];
-  if(lastChord.length&&firstChord.length){
-    sugg.push({label:'bass → bass',P:lowestHit(firstChord),A:lowestHit(lastChord)});
-    const rF=chordRootHit(firstChord),rL=chordRootHit(lastChord);
+  if(srcChord.length&&firstChord.length){
+    sugg.push({label:'bass → bass',P:lowestHit(firstChord),A:lowestHit(srcChord)});
+    const rF=chordRootHit(firstChord),rL=chordRootHit(srcChord);
     if(rF&&rL)sugg.push({label:'root → root',P:rF,A:rL});
-    // common tone: same pitch class in both chords → default them to unison
     for(const c of firstChord){
       const cn=octReduce(notes.find(x=>x.id===c.id).ratio);
-      const m=lastChord.find(l=>eqf(octReduce(notes.find(x=>x.id===l.id).ratio),cn));
+      const m=srcChord.find(l=>eqf(octReduce(notes.find(x=>x.id===l.id).ratio),cn));
       if(m){sugg.push({label:'keep common tone',P:c,A:m,R:'1/1'});break;}
     }
   }
+  pivotCtx.sugg=sugg;
   const box=document.createElement('div');box.className='tunebox pivot';box.id='tunebox';
-  let html=`<span style="width:100%"><b>Pump pivot</b> — tune the copy <i>from</i> the previous chord. Pick a relationship (it previews), then set the ratio · or click a copy note then a source note · Esc keeps unison</span>`;
+  const hint=srcChord.length
+    ? `pick a relationship (it previews before→after), then set the ratio · or click a copy note then a source note · <b>hover a note</b> to see its ratios to the other chord`
+    : `no previous chord here — click a copy note then any note to tune from, or keep unison`;
+  let html=`<span style="width:100%"><b>${kind==='pump'?'Pump':'Paste'} tuning</b> — ${hint}</span>`;
   sugg.forEach((s,i)=>{const nP=notes.find(x=>x.id===s.P.id),nA=notes.find(x=>x.id===s.A.id);
     html+=`<button class="ghost pivsug" data-i="${i}">${s.label} · ${nameOf(nP)}↔${nameOf(nA)}</button>`;});
-  html+=`<button class="ghost" id="pivManual">manual…</button><button class="ghost" id="pivKeep">keep unison</button>`;
+  html+=`<button class="ghost" id="pivManual">manual…</button><button class="primary" id="pivKeep">keep unison</button>`;
   box.innerHTML=html;
   document.getElementById('seq').appendChild(box);
   box.querySelectorAll('.pivsug').forEach(b=>b.onclick=()=>{const s=sugg[+b.dataset.i];openTuneBox(s.P,s.A,s.R);});
-  document.getElementById('pivManual').onclick=()=>{closeTuneBox();retune.from=null;banner('click a COPY note, then the note to tune it FROM');};
-  document.getElementById('pivKeep').onclick=()=>{retune=null;closeTuneBox();banner('kept unison copy');render();};
+  document.getElementById('pivManual').onclick=()=>{closeTuneBox();retune.from=null;banner('click a COPY note, then the note to tune it FROM · cancel returns here');};
+  document.getElementById('pivKeep').onclick=()=>endPivot('kept unison');
+}
+function endPivot(msg){retune=null;pivotCtx=null;closeTuneBox();clearPivotHover();if(msg)banner(msg);render();}
+// hover a note during a pivot → diagonal ratio lines from it to the OTHER chord
+// (copy note → previous chord; previous-chord note → copy's first chord). Only
+// the hovered note's lines, so it never turns into a tangle.
+function clearPivotHover(){const s=grid.querySelector('.pivhover');if(s)s.remove();}
+function drawPivotHover(h){
+  clearPivotHover();
+  if(!pivotCtx)return;
+  const inCopy=pivotCtx.set.has(h);
+  const other=inCopy?pivotCtx.srcChord:pivotCtx.firstChord;
+  if(!other||!other.length)return;
+  const rows=laneRows(),bw=barW();
+  const idx=new Map();rows.forEach((r,i)=>idx.set(r.n.id+':'+r.oct,i));
+  const X=x=>118+frv(x.start)*bw+Math.min(frv(x.len)*bw,26)/2;
+  const Y=x=>{const i=idx.get(x.id+':'+x.oct);return i==null?null:i*LANE_H+LANE_H/2;};
+  const y0=Y(h),x0=X(h);if(y0==null)return;
+  let s='';
+  other.forEach(o=>{const y1=Y(o),x1=X(o);if(y1==null)return;
+    const iv=div(hitAbsRatio(h),hitAbsRatio(o));
+    const col=consonanceColor(log2(octReduce(iv).n*octReduce(iv).d));
+    s+=`<line class="relline" x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="${col}"/>
+        <text class="rellbl2" x="${(x0+x1)/2}" y="${(y0+y1)/2-4}" text-anchor="middle" fill="${col}">${iv.n}/${iv.d}</text>`;});
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('class','relsvg pivhover');
+  svg.setAttribute('width',118+BARS*bw);svg.setAttribute('height',rows.length*LANE_H);
+  svg.innerHTML=s;grid.appendChild(svg);
 }
 document.getElementById('pumpBtn').onclick=pumpDuplicate;
 // tools: pencil (draw), tune (tune-from), select (box). Shift/ctrl always
@@ -1663,9 +1712,8 @@ function dropPaste(){
   hits.push(...pasted);
   pasteMode=null;drawPasteGhost();
   seqSel=new Set(pasted);
-  retune={pasted:new Set(pasted),from:null};
-  banner('pasted — now RETUNE it: click a pasted note, then the note to tune it from · Esc keeps original tuning');
-  renderSeq();
+  histLabel='paste';
+  enterPivot(pasted,'paste');            // choose: keep unison, or tune from the previous chord
 }
 function retuneClick(h){
   if(!retune.from){
@@ -1690,7 +1738,7 @@ function openTuneBox(P,A,presetR){
     <input id="tuneRatio" value="${def}"/>
     <button id="tunePrev" class="ghost" title="hear the previous chord, then the copy at this tuning">▶ before→after</button>
     <button id="tuneApply" class="primary">Apply</button>
-    <button id="tuneCancel" class="ghost">cancel</button>`;
+    <button id="tuneCancel" class="ghost">← back</button>`;
   document.getElementById('seq').appendChild(box);
   const factor=()=>{const r=parseRatio(document.getElementById('tuneRatio').value);
     if(!r)return null;return {r,f:div(mul(hitAbsRatio(A),r),hitAbsRatio(P))};};
@@ -1710,14 +1758,15 @@ function openTuneBox(P,A,presetR){
   const apply=()=>{const fx=factor();
     if(!fx){banner('invalid ratio — n/d like 6/5');return;}
     if(!eqf(fx.f,fr(1,1)))retuneBlock([...retune.pasted],fx.f);
-    retune=null;closeTuneBox();histLabel='pivot tune';
-    banner(`copy tuned so ${nameOf(nP)} sits ${fx.r.n}/${fx.r.d} from ${nameOf(nA)}${showCents?' (shifted '+(cents(fx.f)>0?'+':'')+cents(fx.f).toFixed(1)+'¢)':''}`);
-    render();};
+    histLabel='pivot tune';
+    const msg=`copy tuned so ${nameOf(nP)} sits ${fx.r.n}/${fx.r.d} from ${nameOf(nA)}${showCents?' (shifted '+(cents(fx.f)>0?'+':'')+cents(fx.f).toFixed(1)+'¢)':''}`;
+    endPivot(msg);};
   document.getElementById('tunePrev').onclick=preview;
   document.getElementById('tuneApply').onclick=apply;
   const inp=document.getElementById('tuneRatio');
   inp.addEventListener('keydown',e=>{if(e.key==='Enter')apply();});
-  document.getElementById('tuneCancel').onclick=()=>{retune=null;closeTuneBox();banner('kept unison copy');renderSeq();};
+  // cancel returns to the chooser (doesn't settle on unison)
+  document.getElementById('tuneCancel').onclick=()=>{if(pivotCtx){retune.from=null;openPivotPanel();banner('back to options');}else endPivot('kept unison copy');};
   inp.focus();inp.select();preview();
 }
 function closeTuneBox(){const b=document.getElementById('tunebox');if(b)b.remove();}
@@ -2135,7 +2184,10 @@ document.addEventListener('keydown',e=>{
   if(tune.on){endTune(false);return;}
   if(place.on){cancelPlace();return;}
   if(pasteMode){pasteMode=null;drawPasteGhost();banner('paste cancelled');return;}
-  if(retune){retune=null;closeTuneBox();banner('kept original tuning');renderSeq();return;}
+  if(document.getElementById('tunebox')&&pivotCtx&&!document.querySelector('.tunebox.pivot')){
+    // Esc from the ratio box goes back to the chooser
+    retune.from=null;openPivotPanel();banner('back to options');return;}
+  if(retune){endPivot('kept unison copy');return;}
   if(marquee){marquee=null;drawMarquee();return;}
   if(tool!=='pencil'){setTool('pencil');return;}
   if(seqSel.size){seqSel.clear();renderSeq();return;}
@@ -2212,7 +2264,10 @@ window.__t={genCandidates,intervalHD,consonanceColor,johnston,fr,mul,cents,snapP
 //// ---- internal synth UI -----------------------------------------------------
 function buildSynthUI(){
   const vol=document.getElementById('synVol');vol.value=synth.vol;
-  vol.oninput=()=>{synth.vol=+vol.value;if(master)master.gain.setTargetAtTime(synth.vol,ac.currentTime,0.01);saveSynth();};
+  vol.oninput=()=>{synth.vol=+vol.value;
+    if(master){if(synth.vol<=0){master.gain.cancelScheduledValues(ac.currentTime);master.gain.setValueAtTime(0,ac.currentTime);}
+      else master.gain.setTargetAtTime(synth.vol,ac.currentTime,0.01);}
+    saveSynth();};
   const tb=document.getElementById('oscRows');tb.innerHTML='';
   synth.osc.forEach((o,i)=>{
     const tr=document.createElement('tr');
