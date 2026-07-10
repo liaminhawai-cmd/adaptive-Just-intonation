@@ -118,6 +118,7 @@
   .toolgroup{display:inline-flex;gap:2px}
   .tool{width:auto;padding:6px 9px;font-size:15px;opacity:.55}
   .tool.on{opacity:1;color:var(--acc2);border-color:var(--acc2)}
+  #tetBtn.tet{color:#ff8a8a;border-color:#ff8a8a;background:#2a1515}
   .seqgrid{flex:1;overflow:auto;position:relative}
   .lane{position:relative;height:24px;border-bottom:1px solid #20242f}
   .lane.src{background:#241f12}
@@ -140,8 +141,14 @@
   .loophandle{position:absolute;top:0;height:13px;background:rgba(122,162,255,.4);border-radius:0 0 4px 4px;z-index:7;cursor:grab}
   .loophandle:hover{background:rgba(122,162,255,.6)}
   .loopedge{position:absolute;top:0;height:13px;width:8px;z-index:8;cursor:ew-resize}
+  .patbar{display:flex;gap:5px;align-items:center;padding:5px 12px 3px;border-bottom:1px solid #20242f;flex-wrap:wrap;font-size:12px}
+  .patbar .t{color:var(--dim);font-size:11px}
+  .patbar .chip{padding:3px 9px;width:auto}
+  .patbar .pat.on{color:var(--acc2);border-color:var(--acc2);background:#241f12}
+  .patbar .arrchip{padding:2px 7px;font-size:11px}
+  .patbar #songBtn.on{color:#8affc1;border-color:#8affc1}
   .marquee{position:absolute;border:1px dashed #7aa2ff;background:rgba(122,162,255,.12);z-index:5;pointer-events:none}
-  .relsvg{position:absolute;left:0;top:0;pointer-events:none;z-index:2}
+  .relsvg{position:absolute;left:0;top:0;pointer-events:none;z-index:4}
   .relline{stroke-width:2;opacity:.9}
   .rellbl2{font-size:10px;font-weight:700;paint-order:stroke;stroke:#0a0c12;stroke-width:3px}
   .rellbl2.big{font-size:13px}
@@ -290,6 +297,8 @@
   <table class="osctbl"><thead><tr><th>osc</th><th>wave</th><th>oct</th><th>ratio</th><th>level</th></tr></thead><tbody id="oscRows"></tbody></table>
   <label style="margin-top:8px">Envelope (ADSR)</label>
   <div class="adsr" id="adsrRow"></div>
+  <label style="margin-top:8px">Filter &amp; echo</label>
+  <div class="adsr" id="fxRow"></div>
 
   <h2>History</h2>
   <div class="row">
@@ -337,8 +346,10 @@
       <div class="rphead">rhythm map — click divisions of the bar to enable snapping · <span id="rprimes"></span></div>
       <svg id="rsvg" width="470" height="360"></svg>
     </div>
+    <div class="patbar" id="patbar"></div>
     <div class="seqhead">
       <button id="seqPlay" class="primary">▶ Play</button>
+      <button id="tetBtn" class="ghost" title="A/B comparison: play everything quantized to 12-TET so you can HEAR what just intonation is doing. The model stays exact.">≈12TET</button>
       <button id="seqViewBtn" class="ghost" title="Toggle piano-roll / Ben Johnston staff notation">𝄞 Score</button>
       <button id="rhythmBtn" class="ghost" title="Rhythm map: choose the divisions notes snap to">𝅘𝅥𝅮 Rhythm</button>
       <span class="t" id="rchips" title="active snap divisions — click one to remove"></span>
@@ -362,7 +373,7 @@
 </div>
 
 <script>
-const BUILD=31;   // bump every deploy so you can confirm you're on the latest
+const BUILD=32;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -444,7 +455,9 @@ const NOW=()=>performance.now();
 function rootFreq(){return parseFloat(document.getElementById('rootFreq').value)||261.63;}
 function rootName(){return document.getElementById('rootName').value||'C';}
 const SAL_FLOOR=0.28, SAL_MAX=3;   // salience never fully dies; caps at SAL_MAX
-function addRoot(){notes=[{id:0,ratio:fr(1,1),parent:null,interval:fr(1,1),name:rootName(),salience:0.8}];nextId=1;selected.clear();hits=[];pumpState={blockStart:0};if(typeof loop!=='undefined')loop={start:0,len:0};}
+function addRoot(){notes=[{id:0,ratio:fr(1,1),parent:null,interval:fr(1,1),name:rootName(),salience:0.8}];nextId=1;selected.clear();hits=[];pumpState={blockStart:0};
+  if(typeof loop!=='undefined')loop={start:0,len:0};
+  if(typeof patterns!=='undefined'){patterns=[newPattern('A')];patterns[0].hits=hits;curPat=0;arrangement=[];songMode=false;}}
 function noteFreq(f){return rootFreq()*f.n/f.d;}
 function nameOf(n){return n.id===0?rootName():johnston(n.ratio);}
 function bump(n){if(n)n.salience=Math.min(SAL_MAX,(n.salience||0)+1);}
@@ -535,7 +548,7 @@ function snapPick(cands,targetCents){
 let view={x:0,y:0,k:1};
 const svg=document.getElementById('svg');
 const PXCENT=0.42;
-function render(){renderTable();renderParentSelect();renderQuick();renderScene();renderPreview();renderSeq();renderRChips();markHistory();}
+function render(){renderTable();renderParentSelect();renderQuick();renderScene();renderPreview();renderSeq();renderRChips();renderPatBar();markHistory();}
 
 function renderTable(){
   const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
@@ -758,7 +771,7 @@ function delNote(id){
 }
 
 //// ---- audio: internal 3-oscillator synth with ADSR -----------------------
-let ac,master,masterComp;
+let ac,master,masterComp,fxFilt,fxDly,fxFb,fxWet;
 const WAVES=['sine','triangle','sawtooth','square'];
 const synth={
   vol:0.5,
@@ -768,6 +781,8 @@ const synth={
     {on:true, wave:'sine',     oct:-1, ratio:{n:1,d:1}, level:0.55},
   ],
   adsr:{a:0.008, d:0.12, s:0.65, r:0.28},   // seconds / 0-1 sustain
+  cutoff:9000, res:0.7,                      // master low-pass
+  dlyTime:0.28, dlyFb:0.3, dlyMix:0.15,      // echo send
 };
 try{const s=JSON.parse(localStorage.getItem('lattice-ui')||'{}').synth;if(s)Object.assign(synth,s);}catch(e){}
 synth.osc.forEach(o=>{if(!o.ratio||!o.ratio.n)o.ratio={n:1,d:1};});   // ratio-based detune (JI-pure)
@@ -778,7 +793,16 @@ function audio(){
     masterComp=ac.createDynamicsCompressor();          // keep chords/drones from clipping
     masterComp.threshold.value=-16;masterComp.ratio.value=4;
     master=ac.createGain();master.gain.value=synth.vol;
-    master.connect(masterComp).connect(ac.destination);
+    fxFilt=ac.createBiquadFilter();fxFilt.type='lowpass';
+    fxFilt.frequency.value=synth.cutoff;fxFilt.Q.value=synth.res;
+    fxDly=ac.createDelay(2);fxDly.delayTime.value=synth.dlyTime;
+    fxFb=ac.createGain();fxFb.gain.value=synth.dlyFb;
+    fxWet=ac.createGain();fxWet.gain.value=synth.dlyMix;
+    master.connect(fxFilt);
+    fxFilt.connect(masterComp);
+    fxFilt.connect(fxDly);fxDly.connect(fxFb).connect(fxDly);
+    fxDly.connect(fxWet).connect(masterComp);
+    masterComp.connect(ac.destination);
   }
   if(ac.state==='suspended')ac.resume();return ac;
 }
@@ -803,7 +827,10 @@ function voiceInto(a,dest,hz,t0,peak,sustainHold){
     osc.start(t0);osc.stop(stopT);
   });
 }
-function playFreq(hz,t0,dur,vol=0.22){voiceInto(audio(),master,hz,t0,vol,dur);}
+let tet12=false;   // A/B: quantize PLAYBACK to 12-TET (model stays exact JI)
+function outHz(hz){if(!tet12)return hz;
+  const m=Math.round(hzToMidiFloat(hz));return 440*Math.pow(2,(m-69)/12);}
+function playFreq(hz,t0,dur,vol=0.22){voiceInto(audio(),master,outHz(hz),t0,vol,dur);}
 //// drones: shift-click a note (lattice node or sequencer lane) to hold it.
 //// Held notes stay salient, so the whole lattice recolours relative to them.
 const drones=new Map(); // "id:oct" -> {o,g}
@@ -823,7 +850,7 @@ function toggleDrone(n,oct=0){
     env.gain.linearRampToValueAtTime(peak,t0+at);
     env.gain.linearRampToValueAtTime(Math.max(0.0001,peak*su),t0+at+dc);
     env.connect(master);
-    const oscs=[],hz=laneFreq(n,oct);
+    const oscs=[],hz=outHz(laneFreq(n,oct));
     synth.osc.forEach(o=>{if(!o.on||o.level<=0)return;
       const osc=a.createOscillator(),g=a.createGain();
       osc.type=o.wave;osc.frequency.value=hz*Math.pow(2,o.oct)*(o.ratio.n/o.ratio.d);
@@ -1170,6 +1197,10 @@ function renderSeq(){
       const edge=br.width>=16&&(e.clientX>br.right-8);
       if(edge){
         seqDrag={hit:h,mode:'len',div:parseRatio(h.div)||divList()[0]};
+        if(seqSel.has(h)&&seqSel.size>1){
+          seqDrag.multi=[...seqSel].map(x=>({x,len0:x.len}));
+          seqDrag.len0=h.len;
+        }
       }else{
         const r=grid.getBoundingClientRect();
         const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
@@ -1318,6 +1349,29 @@ function cancelPlace(){place.on=false;seqBanner.textContent='';render();}
 
 //// loop region (bars). len 0 ⇒ follow the full BARS length.
 let loop={start:0,len:0};
+
+//// patterns: each has its own hits, length, loop and KEY SIGNATURE (gamut).
+//// The lattice holds all notes ever used; a pattern only lights up its own.
+function newPattern(name){return {name,hits:[],bars:1,loopStart:0,loopLen:0,gamut:null};}
+let patterns=[newPattern('A')];
+let curPat=0;
+let arrangement=[];        // song = ordered list of pattern indices
+let songMode=false;
+function packCurrent(){const p=patterns[curPat];if(!p)return;
+  p.hits=hits;p.bars=BARS;p.loopStart=loop.start;p.loopLen=loop.len;
+  p.gamut=notes.filter(n=>n.gamut!==false).map(n=>n.id);}
+function unpackPattern(i){
+  const p=patterns[i];if(!p)return;curPat=i;
+  hits=p.hits;setBars(p.bars||1);
+  loop={start:p.loopStart||0,len:p.loopLen||0};
+  if(p.gamut)notes.forEach(n=>{n.gamut=p.gamut.includes(n.id);});
+  pumpState={blockStart:0};seqSel.clear();seqAutoScroll=true;syncLoopInputs();}
+function switchPattern(i,silent){
+  if(i===curPat){renderPatBar();return;}
+  packCurrent();unpackPattern(i);
+  histLabel='pattern '+patterns[i].name;
+  if(!silent)render();
+  renderPatBar();}
 const loopStartB=()=>Math.max(0,loop.start);
 const loopLenB=()=>loop.len>0?loop.len:BARS;
 const loopEndB=()=>loopStartB()+loopLenB();
@@ -1329,13 +1383,23 @@ function seqStart(){
   const bpm=parseFloat(document.getElementById('bpm').value)||100;
   seq.playing=true;
   seq.barSec=240/bpm;                 // 4 beats per bar
-  seq.loopStart=loopStartB();
-  seq.loopBars=loopLenB();
+  if(songMode&&arrangement.length){
+    packCurrent();
+    seq.entries=[];let cum=0;
+    arrangement.forEach(pi=>{const p=patterns[pi];if(!p)return;
+      seq.entries.push({pi,start:cum,bars:p.bars||1});cum+=(p.bars||1);});
+    seq.songBars=cum;seq.loopStart=0;seq.loopBars=cum;
+  }else{
+    songMode=false;
+    seq.entries=null;
+    seq.loopStart=loopStartB();
+    seq.loopBars=loopLenB();
+  }
   seq.t0=a.currentTime+0.08;          // moment loopStart sounds
   seq.schedTime=a.currentTime;
   document.getElementById('seqPlay').textContent='■ Stop';
   seq.timer=setInterval(seqSchedule,25);
-  seqSchedule();
+  seqSchedule();renderPatBar();
 }
 // reads `hits` live each window, playing only those inside the loop region,
 // so notes added/removed while looping are picked up on their next occurrence
@@ -1344,8 +1408,16 @@ function seqSchedule(){
   const w0=seq.schedTime, w1=a.currentTime+0.16;
   if(w1<=w0)return;
   const per=seq.loopBars*seq.barSec, ls=seq.loopStart;
-  hits.forEach(h=>{
-    const sb=frv(h.start);
+  const pool=[];
+  if(seq.entries){        // song: every pattern's hits at its arrangement offset
+    seq.entries.forEach(en=>{
+      (patterns[en.pi]?patterns[en.pi].hits:[]).forEach(h=>{
+        const sb=frv(h.start);
+        if(sb<(en.bars||1)-1e-9)pool.push({h,sb:en.start+sb});
+      });
+    });
+  }else hits.forEach(h=>pool.push({h,sb:frv(h.start)}));
+  pool.forEach(({h,sb})=>{
     if(sb<ls-1e-9||sb>=ls+seq.loopBars-1e-9)return;   // outside the loop region
     const first=seq.t0+(sb-ls)*seq.barSec;
     let k=Math.ceil((w0-first)/per-1e-9);if(k<0)k=0;
@@ -1372,12 +1444,62 @@ function seqStop(){
 function seqFrame(){
   if(!seq.playing||!ac)return;
   const pos=seq.loopStart+((ac.currentTime-seq.t0)/seq.barSec)%seq.loopBars;
-  seq.posBars=pos<0?seq.loopStart:pos;
+  if(seq.entries){       // song mode: follow the arrangement visually
+    const sp=pos<0?0:pos;
+    const en=seq.entries.find(e=>sp>=e.start-1e-9&&sp<e.start+e.bars-1e-9)||seq.entries[0];
+    if(en&&en.pi!==curPat)switchPattern(en.pi);   // gamut swap = visuals rebalance via salience
+    seq.posBars=en?sp-en.start:0;
+  }else{
+    seq.posBars=pos<0?seq.loopStart:pos;
+  }
   drawPlayhead();
   grid.querySelectorAll('.noteBar').forEach(b=>{
     const s=+b.dataset.sb,l=+b.dataset.lb;
     b.classList.toggle('play',seq.posBars>=s&&seq.posBars<s+l);
   });
+}
+
+//// ---- pattern bar + song arrangement ----------------------------------------
+function renderPatBar(){
+  const el=document.getElementById('patbar');if(!el)return;
+  let html='<span class="t">pattern</span>';
+  patterns.forEach((p,i)=>html+=`<button class="chip ghost pat${i===curPat?' on':''}" data-i="${i}" title="switch pattern (own key signature, length, loop)">${p.name}</button>`);
+  html+=`<button class="chip ghost" id="patAdd" title="new empty pattern with its own key signature">+</button>
+    <button class="chip ghost" id="patDup" title="duplicate the current pattern">⧉</button>
+    <span class="t" style="margin-left:16px">song</span><span id="arrChips" style="display:inline-flex;gap:3px"></span>
+    <button class="chip ghost" id="arrAdd" title="append the current pattern to the song">＋add</button>
+    <button class="chip ghost" id="arrClear" title="clear the song">✕</button>
+    <button class="chip ghost${songMode?' on':''}" id="songBtn" title="play the song: patterns in order, the view following along">${songMode&&seq.playing?'⏹ song':'▶ song'}</button>`;
+  el.innerHTML=html;
+  el.querySelectorAll('.pat').forEach(b=>b.onclick=()=>{if(seq.playing&&songMode)return;switchPattern(+b.dataset.i);});
+  document.getElementById('patAdd').onclick=()=>{
+    packCurrent();
+    const nm=String.fromCharCode(65+patterns.length%26);
+    patterns.push(newPattern(nm));
+    switchPattern(patterns.length-1);
+    banner('new pattern '+nm+' — its own key signature: only notes you use here get lanes');
+  };
+  document.getElementById('patDup').onclick=()=>{
+    packCurrent();
+    const src=patterns[curPat];
+    const cp=newPattern(src.name+'′');
+    cp.bars=src.bars;cp.loopStart=src.loopStart;cp.loopLen=src.loopLen;
+    cp.gamut=src.gamut?[...src.gamut]:null;
+    cp.hits=src.hits.map(h=>({id:h.id,oct:h.oct,start:fr(h.start.n,h.start.d),len:fr(h.len.n,h.len.d),div:h.div}));
+    patterns.push(cp);switchPattern(patterns.length-1);
+  };
+  const arr=document.getElementById('arrChips');
+  arrangement.forEach((pi,ai)=>{const b=document.createElement('button');
+    b.className='chip ghost arrchip';b.textContent=patterns[pi]?patterns[pi].name:'?';
+    b.title='click to remove from the song';
+    b.onclick=()=>{arrangement.splice(ai,1);renderPatBar();};arr.appendChild(b);});
+  document.getElementById('arrAdd').onclick=()=>{arrangement.push(curPat);renderPatBar();};
+  document.getElementById('arrClear').onclick=()=>{arrangement=[];renderPatBar();};
+  document.getElementById('songBtn').onclick=()=>{
+    if(seq.playing){seqStop();songMode=false;renderPatBar();return;}
+    if(!arrangement.length){banner('song is empty — press ＋add to append the current pattern');return;}
+    songMode=true;renderPatBar();seqStart();
+  };
 }
 
 //// ---- comma-pump paste (Ctrl+B) --------------------------------------------
@@ -1562,6 +1684,11 @@ function drawPivotHover(h){
   svg.innerHTML=s;grid.appendChild(svg);
 }
 document.getElementById('pumpBtn').onclick=pumpDuplicate;
+document.getElementById('tetBtn').onclick=function(){
+  tet12=!tet12;this.classList.toggle('tet',tet12);
+  banner(tet12?'⚠ playing in 12-TET for comparison — this is what you\'re escaping. Click again for JI.'
+             :'back to just intonation ✓');
+};
 // tools: pencil (draw), tune (tune-from), select (box). Shift/ctrl always
 // force select regardless of tool, matching DAW habits.
 let tool='pencil';
@@ -2049,26 +2176,41 @@ document.getElementById('midiFile').addEventListener('change',e=>{
 
 //// ---- project save/load ----------------------------------------------------
 const STORE_KEY='lattice-project-v1';
+const packHits=list=>list.map(h=>({id:h.id,oct:h.oct,sn:h.start.n,sd:h.start.d,ln:h.len.n,ld:h.len.d,div:h.div}));
+const unpackHits=list=>(list||[]).map(o=>({id:o.id,oct:o.oct,start:fr(o.sn,o.sd),len:fr(o.ln,o.ld),div:o.div}));
 function serialize(){
-  return {v:1,
+  packCurrent();
+  return {v:2,
     root:rootName(),freq:rootFreq(),
-    bpm:document.getElementById('bpm').value,bars:BARS,
+    bpm:document.getElementById('bpm').value,
     notes:notes.map(n=>({id:n.id,n:n.ratio.n,d:n.ratio.d,parent:n.parent,gamut:n.gamut!==false})),
     nextId,
-    hits:hits.map(h=>({id:h.id,oct:h.oct,sn:h.start.n,sd:h.start.d,ln:h.len.n,ld:h.len.d,div:h.div})),
+    patterns:patterns.map(p=>({name:p.name,bars:p.bars,ls:p.loopStart,ll:p.loopLen,gamut:p.gamut,hits:packHits(p.hits)})),
+    curPat,arrangement,
     rdivs:[...rhythmDivs],rprimes:rhythmPrimes};
 }
 function deserialize(st){
-  if(!st||st.v!==1||!Array.isArray(st.notes)||!st.notes.length)return false;
+  if(!st||(st.v!==1&&st.v!==2)||!Array.isArray(st.notes)||!st.notes.length)return false;
   document.getElementById('rootName').value=st.root||'C';
   document.getElementById('rootFreq').value=st.freq||261.63;
   document.getElementById('bpm').value=st.bpm||100;
-  setBars(st.bars||1);
   notes=st.notes.map(o=>({id:o.id,ratio:fr(o.n,o.d),parent:o.parent,interval:fr(1,1),
     name:'',salience:0.4,gamut:o.gamut!==false}));
   nextId=st.nextId||Math.max(0,...notes.map(n=>n.id))+1;
-  hits=(st.hits||[]).map(o=>({id:o.id,oct:o.oct,start:fr(o.sn,o.sd),len:fr(o.ln,o.ld),div:o.div}));
-  pumpState={blockStart:0};
+  if(st.v===2&&Array.isArray(st.patterns)&&st.patterns.length){
+    patterns=st.patterns.map(p=>({name:p.name||'A',bars:p.bars||1,loopStart:p.ls||0,loopLen:p.ll||0,
+      gamut:p.gamut||null,hits:unpackHits(p.hits)}));
+    arrangement=(st.arrangement||[]).filter(i=>i>=0&&i<patterns.length);
+    curPat=Math.min(st.curPat||0,patterns.length-1);
+    unpackPattern(curPat);
+  }else{ // v1: wrap into a single pattern
+    patterns=[newPattern('A')];curPat=0;arrangement=[];
+    patterns[0].hits=unpackHits(st.hits);
+    patterns[0].bars=st.bars||1;
+    patterns[0].gamut=notes.filter(n=>n.gamut!==false).map(n=>n.id);
+    unpackPattern(0);
+  }
+  songMode=false;pumpState={blockStart:0};
   if(Array.isArray(st.rdivs)&&st.rdivs.length)rhythmDivs=new Set(st.rdivs);
   if(st.rprimes)rhythmPrimes=st.rprimes;
   selected.clear();seqAutoScroll=true;
@@ -2340,7 +2482,9 @@ document.getElementById('playSel').onclick=()=>{const l=notes.filter(n=>selected
 document.getElementById('fit').onclick=fitView;
 document.getElementById('zin').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,1.2);
 document.getElementById('zout').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,1/1.2);
-document.getElementById('seqPlay').onclick=()=>{seq.playing?seqStop():seqStart();};
+document.getElementById('seqPlay').onclick=()=>{
+  if(seq.playing){seqStop();songMode=false;renderPatBar();return;}
+  songMode=false;seqStart();};
 document.getElementById('seqClear').onclick=()=>{hits=[];renderSeq();};
 document.getElementById('bpm').addEventListener('change',()=>{});
 document.getElementById('seqBars').addEventListener('change',e=>{setBars(parseInt(e.target.value));render();});
@@ -2443,7 +2587,22 @@ grid.addEventListener('mousemove',e=>{
   });
   if(!best)return;
   const newLen=subf(best,h.start);
-  if(newLen.n>0&&!eqf(newLen,h.len)){h.len=newLen;renderSeq();}
+  if(newLen.n<=0)return;
+  if(seqDrag.multi){
+    // apply the SAME delta to every selected note; each clamps at the smallest
+    // enabled division and sticks there while the others keep shrinking (DAW style)
+    const delta=subf(newLen,seqDrag.len0);
+    const minL=divList().reduce((m,d)=>frv(d)<frv(m)?d:m);
+    let changed=false;
+    seqDrag.multi.forEach(({x,len0})=>{
+      let nl=addf(len0,delta);
+      if(nl.n<=0||frv(nl)<frv(minL))nl=fr(minL.n,minL.d);
+      if(!eqf(nl,x.len)){x.len=nl;changed=true;}
+    });
+    if(changed)renderSeq();
+    return;
+  }
+  if(!eqf(newLen,h.len)){h.len=newLen;renderSeq();}
 });
 window.addEventListener('mouseup',()=>{
   if(marquee){finishMarquee();return;}
@@ -2569,6 +2728,18 @@ function buildSynthUI(){
     w.innerHTML=`<span>${lbl}</span><input type="range" min="${mn}" max="${mx}" step="0.005" value="${synth.adsr[k]}">`;
     w.querySelector('input').addEventListener('input',e=>{synth.adsr[k]=+e.target.value;saveSynth();});
     ad.appendChild(w);
+  });
+  const fx=document.getElementById('fxRow');fx.innerHTML='';
+  [['cutoff','cut',100,12000,v=>{if(fxFilt)fxFilt.frequency.setTargetAtTime(v,ac.currentTime,0.02);}],
+   ['res','res',0,12,v=>{if(fxFilt)fxFilt.Q.setTargetAtTime(v,ac.currentTime,0.02);}],
+   ['dlyTime','time',0.05,1,v=>{if(fxDly)fxDly.delayTime.setTargetAtTime(v,ac.currentTime,0.05);}],
+   ['dlyFb','fb',0,0.85,v=>{if(fxFb)fxFb.gain.setTargetAtTime(v,ac.currentTime,0.02);}],
+   ['dlyMix','echo',0,0.6,v=>{if(fxWet)fxWet.gain.setTargetAtTime(v,ac.currentTime,0.02);}]]
+  .forEach(([k,lbl,mn,mx,apply])=>{
+    const w=document.createElement('div');w.className='adcell';
+    w.innerHTML=`<span>${lbl}</span><input type="range" min="${mn}" max="${mx}" step="0.01" value="${synth[k]}">`;
+    w.querySelector('input').addEventListener('input',e=>{synth[k]=+e.target.value;apply(synth[k]);saveSynth();});
+    fx.appendChild(w);
   });
 }
 
