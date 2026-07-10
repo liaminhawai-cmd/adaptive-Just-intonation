@@ -373,7 +373,7 @@
 </div>
 
 <script>
-const BUILD=32;   // bump every deploy so you can confirm you're on the latest
+const BUILD=33;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -939,6 +939,7 @@ let seqView='roll';              // 'roll' | 'score'
 let seqAutoScroll=true;          // scroll middle octave into view on next roll render
 let hits=[];                     // {id, oct, start:frac(bars), len:frac(bars), div:'n/d'}
 let seqDrag=null;                // {hit, div} — live length drag (hit edited in place)
+let xpose=null;                  // group transpose drag (multi-selection, vertical)
 let seqSel=new Set();            // selected hit refs (ctrl+click / ctrl+marquee)
 let clip=null;                   // copied block: {items:[{id,oct,ds,len,div}], span}
 let pasteMode=null;              // {start:frac} ghost follows mouse until click drops
@@ -1204,6 +1205,7 @@ function renderSeq(){
       }else{
         const r=grid.getBoundingClientRect();
         const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
+        if(seqSel.has(h)&&seqSel.size>1){startXpose(h,xBars);return;}   // group transpose
         seqDrag={hit:h,mode:'move',div:parseRatio(h.div)||divList()[0],
           grabOff:xBars-frv(h.start),lastLane:h.id+':'+h.oct,
           origId:h.id,origOct:h.oct,origStart:h.start,origLen:h.len};
@@ -1230,7 +1232,7 @@ function renderSeq(){
     if(i>=0)grid.scrollTop=Math.max(0,i*LANE_H-grid.clientHeight/2+LANE_H*2);
     seqAutoScroll=false;
   }
-  drawPlaceGhost();drawPlayhead();drawMoveGhost();drawRelOverlay();drawLoop();
+  drawPlaceGhost();drawPlayhead();drawMoveGhost();drawXposeGhosts();drawRelOverlay();drawLoop();
   scheduleSave();markHistory();
 }
 function drawMoveGhost(){
@@ -2009,6 +2011,68 @@ function openTuneBox(P,A,presetR){
   inp.focus();inp.select();preview();
 }
 function closeTuneBox(){const b=document.getElementById('tunebox');if(b)b.remove();}
+
+//// ---- transpose-on-drag (multi-select) --------------------------------------
+// Drag a selected note (of a multi-selection) vertically to shift the whole
+// group. During the drag it previews by SCALE DEGREE (each note moves N steps
+// within the key). On drop you choose: keep the diatonic degrees, or preserve
+// the exact intervals anchored on one note (creating pitches where needed).
+function absRatioOf(id,oct){const n=notes.find(x=>x.id===id);if(!n)return fr(1,1);
+  return oct>=0?mul(n.ratio,fr(Math.pow(2,oct),1)):mul(n.ratio,fr(1,Math.pow(2,-oct)));}
+function startXpose(anchor,xBars){
+  const rows=laneRows();const idx=new Map();rows.forEach((r,i)=>idx.set(r.n.id+':'+r.oct,i));
+  xpose={rows,anchor,astart:anchor.start,grabRow:idx.get(anchor.id+':'+anchor.oct)||0,
+    grabOff:xBars-frv(anchor.start),rowDelta:0,dragged:false,
+    items:[...seqSel].map(h=>({hit:h,oid:h.id,ooct:h.oct,ostart:h.start,orow:idx.get(h.id+':'+h.oct)||0}))};
+}
+function drawXposeGhosts(){
+  grid.querySelectorAll('.xghost').forEach(e=>e.remove());
+  if(!xpose)return;const bw=barW();
+  xpose.items.forEach(it=>{if(it.orow==null)return;
+    const g=document.createElement('div');g.className='movingghost xghost';
+    g.style.left=(118+frv(it.ostart)*bw)+'px';
+    g.style.width=Math.max(4,frv(it.hit.len)*bw-2)+'px';
+    g.style.top=(it.orow*LANE_H+2)+'px';
+    const n=notes.find(x=>x.id===it.oid);if(n)g.style.background=consonanceColor(nodeHD(n));
+    grid.appendChild(g);});
+}
+function previewXpose(){
+  const t=audio().currentTime;
+  xpose.items.forEach(it=>{const n=notes.find(x=>x.id===it.oid);
+    if(n)playFreq(laneFreq(n,it.ooct),t,0.8,0.12);});               // before
+  xpose.items.forEach(it=>{const n=notes.find(x=>x.id===it.hit.id);
+    if(n)playFreq(laneFreq(n,it.hit.oct),t+0.85,0.8,0.14);});       // after
+}
+function openTransposeChooser(){
+  closeTuneBox();
+  const dir=xpose.rowDelta<0?'up':'down';  // rows go high→low, so −delta = higher
+  const box=document.createElement('div');box.className='tunebox pivot';box.id='tunebox';
+  let html=`<span style="width:100%"><b>Transpose ${dir}</b> — keep the diatonic scale degrees, or preserve the exact intervals anchored on one note (it previews before→after). Esc cancels.</span>`;
+  html+=`<button class="ghost pivsug" id="xdeg">scale degrees</button>`;
+  xpose.items.slice().sort((a,b)=>hitAbsCents(b.hit)-hitAbsCents(a.hit)).forEach(it=>{
+    const n=notes.find(x=>x.id===it.oid);const i=xpose.items.indexOf(it);
+    html+=`<button class="ghost xint" data-i="${i}">interval · keep ${nameOf(n)}</button>`;});
+  html+=`<button class="ghost" id="xcancel">cancel</button>`;
+  box.innerHTML=html;document.getElementById('seq').appendChild(box);
+  document.getElementById('xdeg').onclick=()=>finishXpose('scale degrees');
+  box.querySelectorAll('.xint').forEach(b=>b.onclick=()=>applyXposeInterval(+b.dataset.i));
+  document.getElementById('xcancel').onclick=cancelXpose;
+  previewXpose();
+}
+function finishXpose(kind){xpose=null;closeTuneBox();histLabel='transpose';banner('transposed by '+kind);render();}
+function applyXposeInterval(i){
+  const a=xpose.items[i];
+  const f=div(hitAbsRatio(a.hit),absRatioOf(a.oid,a.ooct));   // interval the anchor moved by
+  xpose.items.forEach(it=>{it.hit.id=it.oid;it.hit.oct=it.ooct;});   // revert pitch, keep times
+  if(!eqf(f,fr(1,1)))retuneBlock(xpose.items.map(it=>it.hit),f);
+  const nm=nameOf(notes.find(x=>x.id===a.oid));
+  xpose=null;closeTuneBox();histLabel='transpose (interval)';
+  banner('transposed preserving intervals, keeping '+nm+' on its degree');render();
+}
+function cancelXpose(){
+  xpose.items.forEach(it=>{it.hit.id=it.oid;it.hit.oct=it.ooct;it.hit.start=it.ostart;});
+  xpose=null;closeTuneBox();banner('transpose cancelled');render();
+}
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
   const mod=e.ctrlKey||e.metaKey;
@@ -2544,6 +2608,29 @@ grid.addEventListener('mousemove',e=>{
     if(ts){pasteMode.start=ts.start;drawPasteGhost();}
     return;
   }
+  if(xpose){
+    const r=grid.getBoundingClientRect();
+    const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
+    const rows=xpose.rows;
+    let ar=Math.floor((e.clientY-r.top+grid.scrollTop)/LANE_H);
+    ar=Math.max(0,Math.min(rows.length-1,ar));
+    const rowDelta=ar-xpose.grabRow;
+    const ts=timeSnap(Math.max(0,xBars-xpose.grabOff),xpose.anchor);
+    const td=ts?subf(ts.start,xpose.astart):fr(0,1);
+    xpose.items.forEach(it=>{
+      let nr=it.orow+rowDelta;nr=Math.max(0,Math.min(rows.length-1,nr));
+      const row=rows[nr];it.hit.id=row.n.id;it.hit.oct=row.oct;
+      let ns=addf(it.ostart,td);
+      if(frv(ns)<0)ns=fr(0,1);
+      if(frv(ns)+frv(it.hit.len)>BARS)ns=subf(fr(BARS,1),it.hit.len);
+      it.hit.start=ns;
+    });
+    if(rowDelta!==xpose.rowDelta&&rows[Math.max(0,Math.min(rows.length-1,xpose.grabRow+rowDelta))])
+      playLane(rows[Math.max(0,Math.min(rows.length-1,xpose.grabRow+rowDelta))].n,rows[Math.max(0,Math.min(rows.length-1,xpose.grabRow+rowDelta))].oct,0.35);
+    xpose.rowDelta=rowDelta;xpose.dragged=true;
+    renderSeq();
+    return;
+  }
   if(!seqDrag)return;
   const r=grid.getBoundingClientRect();
   const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
@@ -2606,6 +2693,11 @@ grid.addEventListener('mousemove',e=>{
 });
 window.addEventListener('mouseup',()=>{
   if(marquee){finishMarquee();return;}
+  if(xpose){
+    if(!xpose.dragged||xpose.rowDelta===0){xpose=null;grid.querySelectorAll('.xghost').forEach(e=>e.remove());renderSeq();}
+    else openTransposeChooser();
+    return;
+  }
   if(!seqDrag){return;}
   curDur=seqDrag.hit.len;                    // last-edited length becomes current
   seqDrag=null;
@@ -2614,6 +2706,7 @@ window.addEventListener('mouseup',()=>{
 });
 document.addEventListener('keydown',e=>{
   if(e.key!=='Escape')return;
+  if(xpose){cancelXpose();return;}
   if(tune.on){endTune(false);return;}
   if(place.on){cancelPlace();return;}
   if(pasteMode){pasteMode=null;drawPasteGhost();banner('paste cancelled');return;}
