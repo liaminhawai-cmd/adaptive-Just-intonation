@@ -147,16 +147,21 @@
   .patbar{display:flex;gap:5px;align-items:center;padding:5px 12px 3px;border-bottom:1px solid #20242f;flex-wrap:wrap;font-size:12px}
   .patbar .t{color:var(--dim);font-size:11px}
   .patbar .chip{padding:3px 9px;width:auto}
-  .patbar .pat.on{color:var(--acc2);border-color:var(--acc2);background:#241f12}
+  .patbar .patwrap{display:inline-flex;align-items:center;border-radius:7px}
+  .patbar .patwrap.on{background:#241f12;box-shadow:0 0 0 1px var(--acc2)}
+  .patbar .patwrap.on .pat{color:var(--acc2)}
+  .patbar .patwrap .pat{border-top-right-radius:0;border-bottom-right-radius:0;border-right:none}
+  .patbar .patadd2{border-top-left-radius:0;border-bottom-left-radius:0;padding:3px 6px;color:var(--dim)}
+  .patbar .patadd2:hover{color:#8affc1;border-color:#8affc1}
   .patbar .arrchip{padding:2px 5px 2px 7px;font-size:11px;cursor:grab;display:inline-flex;align-items:center;gap:5px}
   .patbar .pat.patmenu{display:inline-flex;align-items:center;gap:5px;cursor:grab}
-  .patbar #arrChips{min-width:40px;min-height:20px;border:1px dashed transparent;border-radius:6px;padding:1px 3px}
+  .patbar #arrChips{min-width:80px;min-height:22px;border:1px dashed #2a2e3a;border-radius:6px;padding:1px 3px}
   .patbar #arrChips.dropready{border-color:var(--acc);background:rgba(122,162,255,.08)}
-  .patbar #arrChips:empty::after{content:'drag patterns here';color:var(--dim);font-size:10px;opacity:.6;padding:0 4px}
+  .patbar #arrChips:empty::after{content:'⊕ a pattern, or drag one here';color:var(--dim);font-size:10px;opacity:.6;padding:0 4px}
   .patbar .arrchip.dragging{opacity:.4}
   .patbar .arrchip .arrx{margin-left:5px;opacity:.6;cursor:pointer}
   .patbar .arrchip .arrx:hover{opacity:1;color:#ff7a7a}
-  .patbar #songBtn.on{color:#8affc1;border-color:#8affc1}
+  #playModeBtn.songon{color:#8affc1;border-color:#8affc1}
   .marquee{position:absolute;border:1px dashed #7aa2ff;background:rgba(122,162,255,.12);z-index:5;pointer-events:none}
   .relsvg{position:absolute;left:0;top:0;pointer-events:none;z-index:4}
   .relline{stroke-width:2;opacity:.9}
@@ -371,6 +376,7 @@
     <div class="patbar" id="patbar"></div>
     <div class="seqhead">
       <button id="seqPlay" class="primary">▶ Play</button>
+      <button id="playModeBtn" class="ghost" title="Pattern mode plays the pattern you're editing; Song mode plays the whole arrangement (the song strip above).">◼ Pattern</button>
       <button id="tetBtn" class="ghost" title="A/B comparison: play everything quantized to 12-TET so you can HEAR what just intonation is doing. The model stays exact.">≈12TET</button>
       <button id="seqViewBtn" class="ghost" title="Toggle piano-roll / Ben Johnston staff notation">𝄞 Score</button>
       <button id="rhythmBtn" class="ghost" title="Rhythm map: choose the divisions notes snap to">𝅘𝅥𝅮 Rhythm</button>
@@ -395,7 +401,7 @@
 </div>
 
 <script>
-const BUILD=37;   // bump every deploy so you can confirm you're on the latest
+const BUILD=39;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -1260,27 +1266,39 @@ function renderSeq(){
       e.preventDefault();e.stopPropagation();
       const h=hits[+b.dataset.i];if(!h)return;
       curDur=h.len;renderRChips();                    // touched note sets the current value
-      if(wantSelect(e)){                              // toggle selection
+      const mod=e.shiftKey||e.ctrlKey||e.metaKey;
+      const busy=retune||pasteMode||place.on||tool==='tune';
+      const br=b.getBoundingClientRect();
+      const edge=br.width>=16&&(e.clientX>br.right-8);
+      // Group drag: plain press on any note in a multi-selection moves/resizes the
+      // whole group — works no matter which tool is active. Modifier still toggles.
+      if(!mod&&!busy&&seqSel.has(h)&&seqSel.size>1){
+        if(edge){
+          seqDrag={hit:h,mode:'len',div:parseRatio(h.div)||divList()[0],
+            multi:[...seqSel].map(x=>({x,len0:x.len})),len0:h.len};
+        }else{
+          const r=grid.getBoundingClientRect();
+          const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
+          startXpose(h,xBars);
+        }
+        return;
+      }
+      if(mod||tool==='select'){                        // toggle selection
         if(seqSel.has(h))seqSel.delete(h);else seqSel.add(h);
-        renderSeq();return;
+        renderSeq();
+        if(seqSel.size>1)banner(`${seqSel.size} notes selected — drag any of them to move the group`);
+        return;
       }
       if(retune){retuneClick(h);return;}
       if(pasteMode){dropPaste();return;}
       if(place.on){commitPlace();return;}
       if(tool==='tune'){startPlace(h.id,h.oct);return;} // tune a new note from this one
       // pencil tool: right edge resizes length, body moves/retunes the note
-      const br=b.getBoundingClientRect();
-      const edge=br.width>=16&&(e.clientX>br.right-8);
       if(edge){
         seqDrag={hit:h,mode:'len',div:parseRatio(h.div)||divList()[0]};
-        if(seqSel.has(h)&&seqSel.size>1){
-          seqDrag.multi=[...seqSel].map(x=>({x,len0:x.len}));
-          seqDrag.len0=h.len;
-        }
       }else{
         const r=grid.getBoundingClientRect();
         const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
-        if(seqSel.has(h)&&seqSel.size>1){startXpose(h,xBars);return;}   // group transpose
         seqDrag={hit:h,mode:'move',div:parseRatio(h.div)||divList()[0],
           grabOff:xBars-frv(h.start),lastLane:h.id+':'+h.oct,
           origId:h.id,origOct:h.oct,origStart:h.start,origLen:h.len};
@@ -1520,8 +1538,7 @@ function seqStart(){
       seq.entries.push({pi,start:cum,bars:p.bars||1});cum+=(p.bars||1);});
     seq.songBars=cum;seq.loopStart=0;seq.loopBars=cum;
   }else{
-    songMode=false;
-    seq.entries=null;
+    seq.entries=null;                    // pattern mode (mode toggle stays as-is)
     seq.loopStart=loopStartB();
     seq.loopBars=loopLenB();
   }
@@ -1608,21 +1625,29 @@ function patPreview(p,w,hgt){
 function renderPatBar(){
   const el=document.getElementById('patbar');if(!el)return;
   packCurrent();
-  let html='<span class="t">pattern</span>';
-  patterns.forEach((p,i)=>html+=`<button class="chip ghost pat patmenu${i===curPat?' on':''}" data-i="${i}" draggable="true"
-    title="click = switch · double-click = rename · DRAG onto the song strip to arrange">
-    <span class="patname">${p.name}</span>${patPreview(p,34,14)}</button>`);
-  html+=`<button class="chip ghost" id="patAdd" title="new empty pattern with its own key signature">+</button>
+  let html='<span class="t">patterns</span>';
+  patterns.forEach((p,i)=>html+=`<span class="patwrap${i===curPat?' on':''}">
+    <button class="chip ghost pat patmenu" data-i="${i}" draggable="true"
+      title="click = switch/edit · double-click = rename · drag to the song strip">
+      <span class="patname">${p.name}</span>${patPreview(p,34,14)}</button>
+    <button class="chip ghost patadd2" data-i="${i}" title="add ${p.name} to the song →">⊕</button></span>`);
+  html+=`<button class="chip ghost" id="patAdd" title="new pattern (blank / copy a key / preset)">+</button>
     <button class="chip ghost" id="patDup" title="duplicate the current pattern">⧉</button>
-    <span class="t" style="margin-left:16px">song</span><span id="arrChips" style="display:inline-flex;gap:3px"></span>
-    <button class="chip ghost" id="arrAdd" title="append the current pattern to the song (shift+click = ×4)">＋add</button>
-    <button class="chip ghost" id="arrClear" title="clear the song">✕</button>
-    <button class="chip ghost${songMode?' on':''}" id="songBtn" title="play the song: patterns in order, the view following along">${songMode&&seq.playing?'⏹ song':'▶ song'}</button>`;
+    <span class="t" style="margin-left:16px">song ${arrangement.length?'('+arrangement.length+' bar-blocks)':''}</span>
+    <span id="arrChips" style="display:inline-flex;gap:3px"></span>
+    <button class="chip ghost" id="arrClear" title="clear the song">clear</button>`;
   el.innerHTML=html;
+  updatePlayMode();
   el.querySelectorAll('.pat').forEach(b=>{
     b.onclick=()=>{if(seq.playing&&songMode)return;switchPattern(+b.dataset.i);};
     b.ondblclick=e=>{e.stopPropagation();renamePattern(+b.dataset.i);};
     b.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain','pat:'+b.dataset.i);});
+  });
+  el.querySelectorAll('.patadd2').forEach(b=>{
+    b.onclick=e=>{e.stopPropagation();const n=e.shiftKey?4:1;
+      for(let k=0;k<n;k++)arrangement.push(+b.dataset.i);
+      if(!songMode){songMode=true;banner('added to song · switched to Song mode — ▶ Play now runs the arrangement');}
+      renderPatBar();};
   });
   // the song strip accepts pattern-chip drops (append) — FL-style drag & drop
   const strip=document.getElementById('arrChips');
@@ -1676,17 +1701,7 @@ function renderPatBar(){
     });
     arr.appendChild(b);
   });
-  document.getElementById('arrAdd').onclick=e=>{
-    const n=e.shiftKey?4:1;                 // shift+click = add 4 repeats at once
-    for(let i=0;i<n;i++)arrangement.push(curPat);
-    renderPatBar();
-  };
   document.getElementById('arrClear').onclick=()=>{arrangement=[];renderPatBar();};
-  document.getElementById('songBtn').onclick=()=>{
-    if(seq.playing){seqStop();songMode=false;renderPatBar();return;}
-    if(!arrangement.length){banner('song is empty — press ＋add to append the current pattern');return;}
-    songMode=true;renderPatBar();seqStart();
-  };
 }
 function renamePattern(i){
   const p=patterns[i];if(!p)return;
@@ -2841,8 +2856,20 @@ document.getElementById('fit').onclick=fitView;
 document.getElementById('zin').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,1.2);
 document.getElementById('zout').onclick=()=>zoomAt(svg.clientWidth/2,svg.clientHeight/2,1/1.2);
 document.getElementById('seqPlay').onclick=()=>{
-  if(seq.playing){seqStop();songMode=false;renderPatBar();return;}
-  songMode=false;seqStart();};
+  if(seq.playing){seqStop();renderPatBar();return;}
+  if(songMode&&!arrangement.length){banner('Song mode, but the song is empty — drag patterns into the song strip (or ⊕ on a pattern), or switch to Pattern mode.');return;}
+  seqStart();};   // seqStart reads songMode to decide pattern-vs-song
+document.getElementById('playModeBtn').onclick=function(){
+  songMode=!songMode;
+  if(seq.playing)seqStop();
+  updatePlayMode();renderPatBar();
+  banner(songMode?'Song mode — ▶ Play runs the whole arrangement':'Pattern mode — ▶ Play runs the pattern you\'re editing');
+};
+function updatePlayMode(){
+  const b=document.getElementById('playModeBtn');if(!b)return;
+  b.textContent=songMode?'♫ Song':'◼ Pattern';
+  b.classList.toggle('songon',songMode);
+}
 document.getElementById('seqClear').onclick=()=>{hits=[];renderSeq();};
 document.getElementById('bpm').addEventListener('change',()=>{});
 document.getElementById('seqBars').addEventListener('change',e=>{setBars(parseInt(e.target.value));render();});
