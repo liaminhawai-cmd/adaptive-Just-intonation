@@ -373,7 +373,7 @@
 </div>
 
 <script>
-const BUILD=33;   // bump every deploy so you can confirm you're on the latest
+const BUILD=34;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -1251,41 +1251,94 @@ function drawMoveGhost(){
   grid.appendChild(g);
 }
 
-//// score view (Ben Johnston staff notation, read-only)
+//// score view (Ben Johnston staff notation — editable)
 const LETTER_IDX={C:0,D:1,E:2,F:3,G:4,A:5,B:6};
+const SC_HS=5, scoreYOf=d=>25+(48-d)*SC_HS;
+// approximate just pitch (cents) of a diatonic staff step, for click-to-pitch
+const NOMINAL_CENTS=[0,204,386,498,702,884,1088];  // C D E F G A B
+function staffCents(d){const oct=Math.floor(d/7)-4,li=((d%7)+7)%7;return NOMINAL_CENTS[li]+1200*oct;}
+function scoreStaffD(n,oct){const name=nameOf(n),m=name.match(/^([A-G])/);
+  if(m)return (4+oct)*7+LETTER_IDX[m[1]];
+  return 28+Math.round(7*(cents(n.ratio)+1200*oct)/1200);}   // >13-limit fallback
+// map a screen y over the score to the nearest gamut lane row index
+function scoreYToRow(clientY){
+  const svg=grid.querySelector('svg');if(!svg)return 0;
+  const r=svg.getBoundingClientRect();
+  const d=Math.round(48-((clientY-r.top)-25)/SC_HS);
+  const cts=staffCents(d),rows=laneRows();
+  let bi=0,bd=1e9;rows.forEach((row,i)=>{const dd=Math.abs(rowAbsCents(row)-cts);if(dd<bd){bd=dd;bi=i;}});
+  return bi;
+}
 function renderScore(){
   const bw=barW();
-  const W=118+BARS*bw+20, hs=5, yOf=d=>25+(48-d)*hs, H=yOf(14)+25;
+  const W=118+BARS*bw+20, H=scoreYOf(12)+22;
   let s='';
-  // staff lines: treble E4..F5 (d 30..38), bass G2..A3 (d 18..26)
   [30,32,34,36,38,18,20,22,24,26].forEach(d=>
-    s+=`<line x1="118" y1="${yOf(d)}" x2="${W-10}" y2="${yOf(d)}" stroke="#3a4154"/>`);
-  // bar lines
+    s+=`<line x1="118" y1="${scoreYOf(d)}" x2="${W-10}" y2="${scoreYOf(d)}" stroke="#3a4154"/>`);
+  // bar lines + beat ticks
   for(let b=0;b<=BARS;b++){const x=118+b*bw;
-    s+=`<line x1="${x}" y1="${yOf(38)}" x2="${x}" y2="${yOf(18)}" stroke="#2a2e3a"/>`;}
-  // clefs (unicode; falls back harmlessly if the glyph is missing)
-  s+=`<text x="96" y="${yOf(32)+9}" font-size="30" fill="#969bab">𝄞</text>`;
-  s+=`<text x="96" y="${yOf(24)+7}" font-size="26" fill="#969bab">𝄢</text>`;
-  s+=`<text x="8" y="30" font-size="11" fill="#969bab">score view</text>`;
-  s+=`<text x="8" y="44" font-size="10" fill="#5a5f6e">(read-only — edit in Roll)</text>`;
-  hits.forEach(h=>{
+    s+=`<line x1="${x}" y1="${scoreYOf(38)}" x2="${x}" y2="${scoreYOf(18)}" stroke="#2a2e3a"/>`;
+    if(b<BARS)for(let bt=1;bt<4;bt++){const bx=x+bt*bw/4;
+      s+=`<line x1="${bx}" y1="${scoreYOf(38)}" x2="${bx}" y2="${scoreYOf(30)}" stroke="#242833"/>
+          <line x1="${bx}" y1="${scoreYOf(26)}" x2="${bx}" y2="${scoreYOf(18)}" stroke="#242833"/>`;}}
+  s+=`<text x="96" y="${scoreYOf(32)+9}" font-size="30" fill="#969bab">𝄞</text>`;
+  s+=`<text x="96" y="${scoreYOf(24)+7}" font-size="26" fill="#969bab">𝄢</text>`;
+  s+=`<text x="8" y="28" font-size="11" fill="#969bab">score · click to add</text>`;
+  s+=`<text x="8" y="42" font-size="10" fill="#5a5f6e">drag = move · right-click = delete</text>`;
+  const accSeen={};                       // "bar:d:acc" → shown once per bar
+  const startCluster={};                   // "bar16:d" → count, to stagger unisons
+  hits.forEach((h,i)=>{
     const n=notes.find(x=>x.id===h.id);if(!n)return;
     const name=nameOf(n),m=name.match(/^([A-G])(.*)$/);
-    let d,acc;
-    if(m){d=(4+h.oct)*7+LETTER_IDX[m[1]];acc=m[2];}
-    else{const tc=cents(n.ratio)+1200*h.oct;d=28+Math.round(7*tc/1200);acc=name;} // >13-limit fallback
-    const x=118+frv(h.start)*bw+8,y=yOf(d);
-    // ledger lines
-    for(let L=40;L<=d;L+=2)s+=`<line x1="${x-9}" y1="${yOf(L)}" x2="${x+9}" y2="${yOf(L)}" stroke="#3a4154"/>`;
-    for(let L=16;L>=d;L-=2)s+=`<line x1="${x-9}" y1="${yOf(L)}" x2="${x+9}" y2="${yOf(L)}" stroke="#3a4154"/>`;
-    if(d===27||d===28)s+=`<line x1="${x-9}" y1="${yOf(28)}" x2="${x+9}" y2="${yOf(28)}" stroke="#3a4154"/>`;
+    const d=scoreStaffD(n,h.oct),acc=m?m[2]:name;
+    const bar=Math.floor(frv(h.start));
+    // stagger noteheads that share a start and sit within a step
+    const ck=Math.round(frv(h.start)*64)+':'+d, off=(startCluster[ck]=(startCluster[ck]||0)); startCluster[ck]++;
+    const x=118+frv(h.start)*bw+8+off*3, y=scoreYOf(d);
+    for(let L=40;L<=d;L+=2)s+=`<line x1="${x-9}" y1="${scoreYOf(L)}" x2="${x+9}" y2="${scoreYOf(L)}" stroke="#3a4154"/>`;
+    for(let L=16;L>=d;L-=2)s+=`<line x1="${x-9}" y1="${scoreYOf(L)}" x2="${x+9}" y2="${scoreYOf(L)}" stroke="#3a4154"/>`;
+    if(d===27||d===28)s+=`<line x1="${x-9}" y1="${scoreYOf(28)}" x2="${x+9}" y2="${scoreYOf(28)}" stroke="#3a4154"/>`;
     const col=consonanceColor(nodeHD(n));
     const endX=118+(frv(h.start)+frv(h.len))*bw-4;
-    if(endX>x+9)s+=`<line x1="${x+7}" y1="${y}" x2="${endX}" y2="${y}" stroke="${col}" stroke-width="2" opacity=".55"/>`;
-    s+=`<ellipse cx="${x}" cy="${y}" rx="6" ry="4.2" fill="${col}" stroke="#0a0c12"/>`;
-    if(acc)s+=`<text x="${x-8}" y="${y+3.5}" text-anchor="end" font-size="10" fill="#e7e9ef">${acc}</text>`;
+    const sel=seqSel.has(h);
+    s+=`<g class="snote" data-i="${i}" style="cursor:grab">`;
+    if(endX>x+9)s+=`<line x1="${x+7}" y1="${y}" x2="${endX}" y2="${y}" stroke="${col}" stroke-width="2" opacity=".5"/>`;
+    s+=`<ellipse cx="${x}" cy="${y}" rx="6" ry="4.2" fill="${col}" stroke="${sel?'#fff':'#0a0c12'}" stroke-width="${sel?2:1}"/>`;
+    const ak=bar+':'+d+':'+acc;
+    if(acc&&!accSeen[ak]){accSeen[ak]=1;s+=`<text x="${x-8}" y="${y+3.5}" text-anchor="end" font-size="10" fill="#e7e9ef">${acc}</text>`;}
+    s+=`</g>`;
   });
   grid.innerHTML=`<svg width="${W}" height="${H}" style="display:block">${s}</svg>`;
+  const svg=grid.querySelector('svg');
+  // click empty staff → add a note (current value) at the snapped time & nearest pitch
+  svg.addEventListener('mousedown',e=>{
+    if(e.target.closest('.snote'))return;
+    if(pasteMode){dropPaste();return;}
+    if(place.on||retune)return;
+    const r=svg.getBoundingClientRect();
+    const xBars=(e.clientX-r.left-118)/bw;
+    if(xBars<0)return;
+    if(wantSelect(e)){seqSel.clear();renderSeq();return;}
+    const ts=timeSnap(Math.max(0,xBars));if(!ts)return;
+    const row=laneRows()[scoreYToRow(e.clientY)];if(!row)return;
+    const h={id:row.n.id,oct:row.oct,start:ts.start,len:resolveDur(curDur),div:ts.div.n+'/'+ts.div.d};
+    hits.push(h);playLane(row.n,row.oct);
+    seqDrag={hit:h,mode:'move',score:true,div:ts.div,grabOff:xBars-frv(h.start),lastLane:h.id+':'+h.oct,
+      origId:h.id,origOct:h.oct,origStart:h.start,origLen:h.len};
+    renderSeq();
+  });
+  svg.querySelectorAll('.snote').forEach(g=>{
+    g.addEventListener('mousedown',e=>{
+      e.stopPropagation();const h=hits[+g.dataset.i];if(!h)return;
+      curDur=h.len;
+      if(wantSelect(e)){if(seqSel.has(h))seqSel.delete(h);else seqSel.add(h);renderSeq();return;}
+      const r=svg.getBoundingClientRect();const xBars=(e.clientX-r.left-118)/bw;
+      seqDrag={hit:h,mode:'move',score:true,div:parseRatio(h.div)||divList()[0],
+        grabOff:xBars-frv(h.start),lastLane:h.id+':'+h.oct,origId:h.id,origOct:h.oct,origStart:h.start,origLen:h.len};
+    });
+    g.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();
+      const h=hits[+g.dataset.i];seqSel.delete(h);hits.splice(+g.dataset.i,1);renderSeq();});
+  });
 }
 function drawPlayhead(){
   let ph=grid.querySelector('.ph');
@@ -2637,7 +2690,7 @@ grid.addEventListener('mousemove',e=>{
   const h=seqDrag.hit;
   if(seqDrag.mode==='move'){
     const rows=laneRows();
-    let ri=Math.floor((e.clientY-r.top+grid.scrollTop)/LANE_H);
+    let ri=seqDrag.score?scoreYToRow(e.clientY):Math.floor((e.clientY-r.top+grid.scrollTop)/LANE_H);
     ri=Math.max(0,Math.min(rows.length-1,ri));
     const row=rows[ri];
     let ns=h.start;

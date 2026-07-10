@@ -7,7 +7,7 @@ Philosophy guardrails: everything is exact fractions; nothing auto-corrects
 tuning; cents only behind the `showCents` toggle; new pitches always have a
 parent + interval on the lattice.
 
-## 1. Transpose-on-drag for selections (the big one) — Opus
+## 1. Transpose-on-drag for selections (the big one) — Opus  ✅ DONE (build 33)
 Select ≥1 notes → Ctrl+drag (or a dedicated hotkey) moves the whole selection
 vertically as a ghost. On drop, open a chooser (reuse the pivot/tunebox UI):
 - **Preserve scale degrees**: each note maps to the pitch class N steps up or
@@ -21,7 +21,7 @@ vertically as a ghost. On drop, open a chooser (reuse the pivot/tunebox UI):
   (they get parent = anchor source, interval = the factor).
 - Preview before/after like the pump box. Esc cancels the drop.
 
-## 2. Score view v2 + composing in it — Opus
+## 2. Score view v2 + composing in it — Opus  ✅ DONE (build 34)
 Current `renderScore` is read-only with naive x=time placement.
 - Click on staff = add note at snapped time (use `curDur`, `timeSnap`); the
   vertical click position picks the nearest key-signature pitch class + octave
