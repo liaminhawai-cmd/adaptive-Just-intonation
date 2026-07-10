@@ -141,11 +141,16 @@
   .loophandle{position:absolute;top:0;height:13px;background:rgba(122,162,255,.4);border-radius:0 0 4px 4px;z-index:7;cursor:grab}
   .loophandle:hover{background:rgba(122,162,255,.6)}
   .loopedge{position:absolute;top:0;height:13px;width:8px;z-index:8;cursor:ew-resize}
+  .loopruler{position:absolute;top:0;height:5px;z-index:6;cursor:crosshair;background:rgba(255,255,255,.03)}
+  .loopruler:hover{background:rgba(122,162,255,.15)}
   .patbar{display:flex;gap:5px;align-items:center;padding:5px 12px 3px;border-bottom:1px solid #20242f;flex-wrap:wrap;font-size:12px}
   .patbar .t{color:var(--dim);font-size:11px}
   .patbar .chip{padding:3px 9px;width:auto}
   .patbar .pat.on{color:var(--acc2);border-color:var(--acc2);background:#241f12}
-  .patbar .arrchip{padding:2px 7px;font-size:11px}
+  .patbar .arrchip{padding:2px 5px 2px 7px;font-size:11px;cursor:grab}
+  .patbar .arrchip.dragging{opacity:.4}
+  .patbar .arrchip .arrx{margin-left:5px;opacity:.6;cursor:pointer}
+  .patbar .arrchip .arrx:hover{opacity:1;color:#ff7a7a}
   .patbar #songBtn.on{color:#8affc1;border-color:#8affc1}
   .marquee{position:absolute;border:1px dashed #7aa2ff;background:rgba(122,162,255,.12);z-index:5;pointer-events:none}
   .relsvg{position:absolute;left:0;top:0;pointer-events:none;z-index:4}
@@ -274,12 +279,15 @@
       <option value="jazz251">Jazz ii–V–I (tuned, pump it!)</option>
       <option value="rhythm">Rhythm changes A (I–vi–ii–V ×2)</option>
       <option value="blues">12-bar blues (7-limit dom7s)</option>
+      <option value="barbershop">Barbershop dominant-7th tag</option>
       <option value="pump">Syntonic comma pump I–vi–ii–V–I</option>
     </optgroup>
     <optgroup label="JI special effects">
       <option value="giant">Major-third cycle (Coltrane changes / diesis spiral)</option>
+      <option value="mediant">Chromatic-mediant cycle (another diesis spiral)</option>
       <option value="harmonic">Harmonic-series 13th chord (extended = smooth)</option>
       <option value="commaline">Comma-modulation line (81/80 staircase)</option>
+      <option value="chorale">Four-part chorale cadence (I–IV–I⁶–V–I)</option>
     </optgroup>
   </select>
 
@@ -294,7 +302,7 @@
   <h2>Internal synth</h2>
   <label>Master volume</label>
   <input type="range" id="synVol" min="0" max="1" step="0.01" />
-  <table class="osctbl"><thead><tr><th>osc</th><th>wave</th><th>oct</th><th>ratio</th><th>level</th></tr></thead><tbody id="oscRows"></tbody></table>
+  <table class="osctbl"><thead><tr><th>osc</th><th>wave</th><th>oct</th><th>ratio</th><th>level</th><th>pan</th></tr></thead><tbody id="oscRows"></tbody></table>
   <label style="margin-top:8px">Envelope (ADSR)</label>
   <div class="adsr" id="adsrRow"></div>
   <label style="margin-top:8px">Filter &amp; echo</label>
@@ -373,7 +381,7 @@
 </div>
 
 <script>
-const BUILD=34;   // bump every deploy so you can confirm you're on the latest
+const BUILD=36;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -771,22 +779,31 @@ function delNote(id){
 }
 
 //// ---- audio: internal 3-oscillator synth with ADSR -----------------------
-let ac,master,masterComp,fxFilt,fxDly,fxFb,fxWet;
+let ac,master,masterComp,fxFilt,fxDly,fxFb,fxWet,fxConv,fxRevWet;
 const WAVES=['sine','triangle','sawtooth','square'];
 const synth={
   vol:0.5,
   osc:[
-    {on:true, wave:'sawtooth', oct:0,  ratio:{n:1,d:1}, level:0.55},
-    {on:true, wave:'square',   oct:0,  ratio:{n:1,d:1}, level:0.30},
-    {on:true, wave:'sine',     oct:-1, ratio:{n:1,d:1}, level:0.55},
+    {on:true, wave:'sawtooth', oct:0,  ratio:{n:1,d:1}, level:0.55, pan:-0.15},
+    {on:true, wave:'square',   oct:0,  ratio:{n:1,d:1}, level:0.30, pan:0.15},
+    {on:true, wave:'sine',     oct:-1, ratio:{n:1,d:1}, level:0.55, pan:0},
   ],
   adsr:{a:0.008, d:0.12, s:0.65, r:0.28},   // seconds / 0-1 sustain
   cutoff:9000, res:0.7,                      // master low-pass
   dlyTime:0.28, dlyFb:0.3, dlyMix:0.15,      // echo send
+  revMix:0,                                  // reverb send (0 = off)
+  glide:0,                                   // portamento seconds, for drones/mono lines
 };
 try{const s=JSON.parse(localStorage.getItem('lattice-ui')||'{}').synth;if(s)Object.assign(synth,s);}catch(e){}
-synth.osc.forEach(o=>{if(!o.ratio||!o.ratio.n)o.ratio={n:1,d:1};});   // ratio-based detune (JI-pure)
+synth.osc.forEach(o=>{if(!o.ratio||!o.ratio.n)o.ratio={n:1,d:1};if(typeof o.pan!=='number')o.pan=0;});   // ratio-based detune (JI-pure)
 function saveSynth(){try{const u=JSON.parse(localStorage.getItem('lattice-ui')||'{}');u.synth=synth;localStorage.setItem('lattice-ui',JSON.stringify(u));}catch(e){}}
+// a short synthetic decaying-noise impulse response — no sample assets needed
+function makeImpulse(a,secs,decay){
+  const rate=a.sampleRate,len=Math.floor(rate*secs),buf=a.createBuffer(2,len,rate);
+  for(let ch=0;ch<2;ch++){const d=buf.getChannelData(ch);
+    for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/len,decay);}
+  return buf;
+}
 function audio(){
   if(!ac){
     ac=new (window.AudioContext||window.webkitAudioContext)();
@@ -798,16 +815,20 @@ function audio(){
     fxDly=ac.createDelay(2);fxDly.delayTime.value=synth.dlyTime;
     fxFb=ac.createGain();fxFb.gain.value=synth.dlyFb;
     fxWet=ac.createGain();fxWet.gain.value=synth.dlyMix;
+    fxConv=ac.createConvolver();fxConv.buffer=makeImpulse(ac,2.2,2.5);
+    fxRevWet=ac.createGain();fxRevWet.gain.value=synth.revMix;
     master.connect(fxFilt);
     fxFilt.connect(masterComp);
     fxFilt.connect(fxDly);fxDly.connect(fxFb).connect(fxDly);
     fxDly.connect(fxWet).connect(masterComp);
+    fxFilt.connect(fxConv);fxConv.connect(fxRevWet).connect(masterComp);
     masterComp.connect(ac.destination);
   }
   if(ac.state==='suspended')ac.resume();return ac;
 }
 // build the 3-osc voice through a shared ADSR gain into dest; self-stopping.
-// sustainHold = seconds the note is held before the release stage.
+// sustainHold = seconds the note is held before the release stage. Each
+// oscillator gets its own stereo pan (StereoPannerNode) for width.
 function voiceInto(a,dest,hz,t0,peak,sustainHold){
   const {a:at,d:dc,s:su,r:re}=synth.adsr;
   const env=a.createGain();
@@ -823,7 +844,11 @@ function voiceInto(a,dest,hz,t0,peak,sustainHold){
     if(!o.on||o.level<=0)return;
     const osc=a.createOscillator(),g=a.createGain();
     osc.type=o.wave;osc.frequency.value=hz*Math.pow(2,o.oct)*(o.ratio.n/o.ratio.d);
-    g.gain.value=o.level;osc.connect(g).connect(env);
+    g.gain.value=o.level;
+    if(a.createStereoPanner){
+      const pan=a.createStereoPanner();pan.pan.value=Math.max(-1,Math.min(1,o.pan||0));
+      osc.connect(g).connect(pan).connect(env);
+    }else osc.connect(g).connect(env);
     osc.start(t0);osc.stop(stopT);
   });
 }
@@ -851,9 +876,19 @@ function toggleDrone(n,oct=0){
     env.gain.linearRampToValueAtTime(Math.max(0.0001,peak*su),t0+at+dc);
     env.connect(master);
     const oscs=[],hz=outHz(laneFreq(n,oct));
-    synth.osc.forEach(o=>{if(!o.on||o.level<=0)return;
+    // glide (portamento): if another drone is already ringing, start each
+    // oscillator at ITS current frequency and slide to the new pitch instead
+    // of jumping — a genuinely just-intonation-flavoured slur between notes
+    const glideFrom=synth.glide>0&&drones.size?[...drones.values()][0]:null;
+    synth.osc.forEach((o,oi)=>{if(!o.on||o.level<=0)return;
       const osc=a.createOscillator(),g=a.createGain();
-      osc.type=o.wave;osc.frequency.value=hz*Math.pow(2,o.oct)*(o.ratio.n/o.ratio.d);
+      osc.type=o.wave;
+      const target=hz*Math.pow(2,o.oct)*(o.ratio.n/o.ratio.d);
+      if(glideFrom&&glideFrom.oscs[oi]){
+        const startHz=glideFrom.oscs[oi].frequency.value;
+        osc.frequency.setValueAtTime(startHz,t0);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(1,target),t0+synth.glide);
+      }else osc.frequency.value=target;
       g.gain.value=o.level;osc.connect(g).connect(env);osc.start();oscs.push(osc);});
     drones.set(key,{oscs,env});
     midiPlay(hz,1.5);bump(n);
@@ -1518,15 +1553,18 @@ function seqFrame(){
 function renderPatBar(){
   const el=document.getElementById('patbar');if(!el)return;
   let html='<span class="t">pattern</span>';
-  patterns.forEach((p,i)=>html+=`<button class="chip ghost pat${i===curPat?' on':''}" data-i="${i}" title="switch pattern (own key signature, length, loop)">${p.name}</button>`);
+  patterns.forEach((p,i)=>html+=`<button class="chip ghost pat${i===curPat?' on':''}" data-i="${i}" title="switch pattern · double-click to rename">${p.name}</button>`);
   html+=`<button class="chip ghost" id="patAdd" title="new empty pattern with its own key signature">+</button>
     <button class="chip ghost" id="patDup" title="duplicate the current pattern">⧉</button>
     <span class="t" style="margin-left:16px">song</span><span id="arrChips" style="display:inline-flex;gap:3px"></span>
-    <button class="chip ghost" id="arrAdd" title="append the current pattern to the song">＋add</button>
+    <button class="chip ghost" id="arrAdd" title="append the current pattern to the song (shift+click = ×4)">＋add</button>
     <button class="chip ghost" id="arrClear" title="clear the song">✕</button>
     <button class="chip ghost${songMode?' on':''}" id="songBtn" title="play the song: patterns in order, the view following along">${songMode&&seq.playing?'⏹ song':'▶ song'}</button>`;
   el.innerHTML=html;
-  el.querySelectorAll('.pat').forEach(b=>b.onclick=()=>{if(seq.playing&&songMode)return;switchPattern(+b.dataset.i);});
+  el.querySelectorAll('.pat').forEach(b=>{
+    b.onclick=()=>{if(seq.playing&&songMode)return;switchPattern(+b.dataset.i);};
+    b.ondblclick=e=>{e.stopPropagation();renamePattern(+b.dataset.i);};
+  });
   document.getElementById('patAdd').onclick=()=>{
     packCurrent();
     const nm=String.fromCharCode(65+patterns.length%26);
@@ -1543,18 +1581,51 @@ function renderPatBar(){
     cp.hits=src.hits.map(h=>({id:h.id,oct:h.oct,start:fr(h.start.n,h.start.d),len:fr(h.len.n,h.len.d),div:h.div}));
     patterns.push(cp);switchPattern(patterns.length-1);
   };
+  // consecutive identical pattern indices collapse into one "A×4" chip; the
+  // chip still represents that many flat entries underneath (drag moves the
+  // whole run, ✕ removes one repeat at a time)
   const arr=document.getElementById('arrChips');
-  arrangement.forEach((pi,ai)=>{const b=document.createElement('button');
-    b.className='chip ghost arrchip';b.textContent=patterns[pi]?patterns[pi].name:'?';
-    b.title='click to remove from the song';
-    b.onclick=()=>{arrangement.splice(ai,1);renderPatBar();};arr.appendChild(b);});
-  document.getElementById('arrAdd').onclick=()=>{arrangement.push(curPat);renderPatBar();};
+  const runs=[];
+  arrangement.forEach((pi,ai)=>{
+    const last=runs[runs.length-1];
+    if(last&&last.pi===pi)last.end=ai;else runs.push({pi,start:ai,end:ai});
+  });
+  runs.forEach(run=>{
+    const n=run.end-run.start+1,pi=run.pi;
+    const b=document.createElement('button');
+    b.className='chip ghost arrchip';b.draggable=true;b.dataset.start=run.start;b.dataset.end=run.end;
+    const label=(patterns[pi]?patterns[pi].name:'?')+(n>1?'×'+n:'');
+    b.innerHTML=`${label} <span class="arrx" title="remove one repeat">✕</span>`;
+    b.querySelector('.arrx').onclick=e=>{e.stopPropagation();arrangement.splice(run.end,1);renderPatBar();};
+    b.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',String(run.start)+':'+String(run.end));b.classList.add('dragging');});
+    b.addEventListener('dragend',()=>b.classList.remove('dragging'));
+    b.addEventListener('dragover',e=>e.preventDefault());
+    b.addEventListener('drop',e=>{e.preventDefault();
+      const [fs,fe]=e.dataTransfer.getData('text/plain').split(':').map(Number);
+      if(fs===run.start)return;
+      const moved=arrangement.splice(fs,fe-fs+1);
+      const insertAt=fs<run.start?run.start-moved.length:run.start;
+      arrangement.splice(insertAt,0,...moved);
+      renderPatBar();
+    });
+    arr.appendChild(b);
+  });
+  document.getElementById('arrAdd').onclick=e=>{
+    const n=e.shiftKey?4:1;                 // shift+click = add 4 repeats at once
+    for(let i=0;i<n;i++)arrangement.push(curPat);
+    renderPatBar();
+  };
   document.getElementById('arrClear').onclick=()=>{arrangement=[];renderPatBar();};
   document.getElementById('songBtn').onclick=()=>{
     if(seq.playing){seqStop();songMode=false;renderPatBar();return;}
     if(!arrangement.length){banner('song is empty — press ＋add to append the current pattern');return;}
     songMode=true;renderPatBar();seqStart();
   };
+}
+function renamePattern(i){
+  const p=patterns[i];if(!p)return;
+  const nm=prompt('Rename pattern',p.name);
+  if(nm&&nm.trim()){p.name=nm.trim().slice(0,12);renderPatBar();}
 }
 
 //// ---- comma-pump paste (Ctrl+B) --------------------------------------------
@@ -1597,18 +1668,43 @@ function drawLoop(){
   const h=(seqView==='score'?( grid.querySelector('svg')?+grid.querySelector('svg').getAttribute('height'):200):laneRows().length*LANE_H);
   const mk=(cls,l,wid,extra)=>{const d=document.createElement('div');d.className=cls+' loopel';
     d.style.left=l+'px';if(wid!=null)d.style.width=wid+'px';if(extra)Object.assign(d.style,extra);grid.appendChild(d);return d;};
+  // a thin ruler above the notes, always present, for drawing a NEW loop region
+  // by dragging anywhere (FL-style) — separate from grabbing the existing region
+  const ruler=mk('loopruler',118,BARS*barW());
+  ruler.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation();startLoopDraw(e);});
+  ruler.addEventListener('dblclick',e=>{e.preventDefault();e.stopPropagation();
+    loop={start:0,len:0};if(seq.playing){seq.loopStart=0;seq.loopBars=BARS;}syncLoopInputs();drawLoop();});
   mk('loopregion',x0,w,{height:h+'px'});
   const bar=mk('loophandle',x0,w);
   const eL=mk('loopedge',x0-4);
   const eR=mk('loopedge',x0+w-4);
   bar.addEventListener('mousedown',e=>startLoopDrag(e,'move'));
+  bar.addEventListener('dblclick',e=>{e.preventDefault();e.stopPropagation();
+    loop={start:0,len:0};if(seq.playing){seq.loopStart=0;seq.loopBars=BARS;}syncLoopInputs();drawLoop();});
   eL.addEventListener('mousedown',e=>startLoopDrag(e,'left'));
   eR.addEventListener('mousedown',e=>startLoopDrag(e,'right'));
 }
-let loopDrag=null;
+let loopDrag=null,loopDraw=null;
 function startLoopDrag(e,mode){e.preventDefault();e.stopPropagation();
   loopDrag={mode,x:e.clientX,start:loopStartB(),len:loopLenB()};}
+function startLoopDraw(e){
+  const r=grid.getBoundingClientRect();
+  const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
+  const b=loopSnap(Math.max(0,xBars));
+  loopDraw={anchor:b};
+  loop={start:b,len:0.25};syncLoopInputs();drawLoop();
+}
 window.addEventListener('mousemove',e=>{
+  if(loopDraw){
+    const r=grid.getBoundingClientRect();
+    const xBars=(e.clientX-r.left+grid.scrollLeft-118)/barW();
+    const b=loopSnap(Math.max(0,Math.min(BARS,xBars)));
+    const lo=Math.min(loopDraw.anchor,b),hi=Math.max(loopDraw.anchor,b);
+    loop.start=lo;loop.len=Math.max(0.25,hi-lo);
+    if(seq.playing){seq.loopStart=loopStartB();seq.loopBars=loopLenB();}
+    syncLoopInputs();drawLoop();
+    return;
+  }
   if(!loopDrag)return;
   const db=(e.clientX-loopDrag.x)/barW();
   if(loopDrag.mode==='move'){
@@ -1627,7 +1723,7 @@ window.addEventListener('mousemove',e=>{
   if(seq.playing){seq.loopStart=loopStartB();seq.loopBars=loopLenB();}
   syncLoopInputs();drawLoop();
 });
-window.addEventListener('mouseup',()=>{if(loopDrag)loopDrag=null;});
+window.addEventListener('mouseup',()=>{if(loopDrag)loopDrag=null;if(loopDraw)loopDraw=null;});
 function hitAbsCents(h){const n=notes.find(x=>x.id===h.id);return n?cents(n.ratio)+1200*h.oct:0;}
 function lowestHit(list){return list.reduce((m,h)=>hitAbsCents(h)<hitAbsCents(m)?h:m);}
 // chord root = the note the others stack most simply ABOVE (octave-reduced
@@ -1775,19 +1871,31 @@ document.getElementById('showCentsChk').addEventListener('change',e=>{
 //                driving an MPE synth (Surge XT in MPE mode).
 //  mode 'mono' — everything on channel 1, bend before each note (±range). Correct
 //                for a single melodic line on any synth; chords share the last bend.
+// flatten the song arrangement into one absolute-time hit list (each pattern's
+// hits offset by its cumulative bar position) — used so MIDI export can honor
+// song mode instead of only exporting the current pattern
+function songHits(){
+  packCurrent();
+  const out=[];let cum=0;
+  arrangement.forEach(pi=>{const p=patterns[pi];if(!p)return;
+    p.hits.forEach(h=>out.push({id:h.id,oct:h.oct,start:addf(h.start,fr(cum,1)),len:h.len,div:h.div}));
+    cum+=(p.bars||1);});
+  return out;
+}
 function buildMidi(mode){
   const PPQ=480,tpb=PPQ*4;
   const bpm=parseFloat(document.getElementById('bpm').value)||100;
   const range=mode==='mpe'?48:midiRange();
   const members=mode==='mpe'?[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]:[0];
   const raw=[];
+  const srcHits=(songMode&&arrangement.length)?songHits():hits;
   // set pitch-bend range (RPN 0) on every channel we'll use, at t=0
   members.forEach(c=>{
     raw.push({t:0,o:-2,b:[0xB0|c,101,0]},{t:0,o:-2,b:[0xB0|c,100,0]},
              {t:0,o:-2,b:[0xB0|c,6,Math.min(127,range)]},{t:0,o:-2,b:[0xB0|c,38,0]},
              {t:0,o:-2,b:[0xB0|c,101,127]},{t:0,o:-2,b:[0xB0|c,100,127]});
   });
-  const evs=hits.map(h=>{
+  const evs=srcHits.map(h=>{
     const n=notes.find(x=>x.id===h.id);if(!n)return null;
     const m=hzToMidiFloat(laneFreq(n,h.oct));
     const t0=Math.round(frv(h.start)*tpb);
@@ -1821,22 +1929,26 @@ function buildMidi(mode){
                          77,84,114,107,...u32(tr.length),...tr]);
 }
 function exportMidi(mode){
-  if(!hits.length){banner('nothing to export — sketch something first');return;}
+  const useSong=arrangement.length>0;
+  const count=(useSong?songHits():hits).length;
+  if(!count){banner('nothing to export — sketch something first');return;}
   const file=buildMidi(mode);
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([file],{type:'audio/midi'}));
   a.download=mode==='mpe'?'lattice-mpe.mid':'lattice-mono.mid';a.click();URL.revokeObjectURL(a.href);
+  const scope=useSong?`the whole song (${arrangement.length} pattern${arrangement.length>1?'s':''})`:'the current pattern';
   banner(mode==='mpe'
-    ?`exported ${hits.length} notes as MPE .mid (±48 st bends) — import into an MPE DAW + MPE synth (Surge in MPE mode)`
-    :`exported ${hits.length} notes as mono .mid (±${midiRange()} st) — one melodic line, any synth; set the synth's bend range to match`);
+    ?`exported ${count} notes from ${scope} as MPE .mid (±48 st bends) — import into an MPE DAW + MPE synth (Surge in MPE mode)`
+    :`exported ${count} notes from ${scope} as mono .mid (±${midiRange()} st) — one melodic line, any synth; set the synth's bend range to match`);
 }
 function openExportModal(){
-  if(!hits.length){banner('nothing to export — sketch something first');return;}
+  const useSong=arrangement.length>0;
+  if(!(useSong?songHits():hits).length){banner('nothing to export — sketch something first');return;}
   const bg=document.createElement('div');bg.className='modalbg';
   bg.innerHTML=`<div class="modal">
     <h3>Export MIDI</h3>
     <p class="sub">Plain MIDI is 12-tone, so the tuning rides on pitch bends. Choose how they're carried —
-      it depends on what will read the file.</p>
+      it depends on what will read the file.${useSong?` <b>Exporting the whole song</b> (${arrangement.length} pattern${arrangement.length>1?'s':''} in order) since you've built an arrangement — clear it (✕ next to song) to export just the current pattern instead.`:''}</p>
     <button class="sysbtn ghost" data-m="mpe"><b>MPE — polyphonic (recommended)</b>
       <div class="hint" style="margin-top:3px">One channel per simultaneous note (voice-allocated so bends never
       collide), ±48-semitone bends with the standard RPN. Chords stay in tune. Import into an <b>MPE-aware DAW</b>
@@ -1878,6 +1990,14 @@ function hitAbsRatio(h){
 //// to the lowest concurrent note, nearest concurrent above/below, and the
 //// nearest-in-pitch notes just before and after in time. With exactly two
 //// notes ctrl-selected, show the ratio between them.
+// clamp a point into the currently-scrolled viewport of the grid (with a small
+// margin), so relationship lines/labels for far-off partners stay legible
+// instead of vanishing above the top lane or past the right edge.
+function clampToViewport(x,y,marginX,marginY){
+  const vx0=grid.scrollLeft+marginX, vx1=grid.scrollLeft+grid.clientWidth-marginX;
+  const vy0=grid.scrollTop+marginY, vy1=grid.scrollTop+grid.clientHeight-marginY;
+  return {x:Math.max(vx0,Math.min(vx1,x)), y:Math.max(vy0,Math.min(vy1,y))};
+}
 function drawRelOverlay(){
   let svg=grid.querySelector('.relsvg');
   const pairs=[];
@@ -1894,15 +2014,23 @@ function drawRelOverlay(){
   const idx=new Map();rows.forEach((r,i)=>idx.set(r.n.id+':'+r.oct,i));
   const X=h=>118+frv(h.start)*bw+Math.min(frv(h.len)*bw,26)/2;
   const Y=h=>{const i=idx.get(h.id+':'+h.oct);return i==null?null:i*LANE_H+LANE_H/2;};
-  let s='';
+  let s=`<defs><marker id="relArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+    <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke"/></marker></defs>`;
   pairs.forEach(([a,b,big,old])=>{
     const y1=Y(a),y2=Y(b);if(y1==null||y2==null)return;
     const x1=X(a),x2=X(b);
     const iv=div(hitAbsRatio(a),hitAbsRatio(b));
     const red=octReduce(iv);
     const col=old?'#8fa3c8':consonanceColor(log2(red.n*red.d));
-    s+=`<line class="relline${old?' old':''}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}"/>
-        <text class="rellbl2${big?' big':''}" x="${(x1+x2)/2}" y="${(y1+y2)/2-4}" text-anchor="middle" fill="${col}">${old?'from old ':''}${iv.n}/${iv.d}${(big||old)&&showCents?' · '+cents(iv).toFixed(1)+'¢':''}</text>`;
+    // if the target end sits outside the visible viewport, draw a shortened
+    // stub toward it (clamped to the edge) with the label anchored there,
+    // instead of a line/label that runs off-screen and looks like it vanished
+    const p2=clampToViewport(x2,y2,20,16);
+    const clipped=Math.abs(p2.x-x2)>1||Math.abs(p2.y-y2)>1;
+    const ex2=clipped?p2.x:x2, ey2=clipped?p2.y:y2;
+    const lx=clipped?ex2:(x1+ex2)/2, ly=clipped?ey2:(y1+ey2)/2-4;
+    s+=`<line class="relline${old?' old':''}" x1="${x1}" y1="${y1}" x2="${ex2}" y2="${ey2}" stroke="${col}" marker-end="url(#relArrow)"/>
+        <text class="rellbl2${big?' big':''}" x="${lx}" y="${ly-4}" text-anchor="middle" fill="${col}">${old?'from old ':''}${iv.n}/${iv.d}${(big||old)&&showCents?' · '+cents(iv).toFixed(1)+'¢':''}</text>`;
   });
   if(!svg){svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
     svg.setAttribute('class','relsvg');grid.appendChild(svg);}
@@ -2579,6 +2707,12 @@ const CHORD_DEMOS={
   rhythm:{bpm:150,msg:'Rhythm-changes A-section I–vi–ii–V ×2 (jazz\'s most-used turnaround). Loops beautifully and drifts by a syntonic comma when tuned pure — pump it.',
     prog:[['1/1','maj7',0],['5/3','dom7',0.5,0.5],['10/9','min7',1],['3/2','dom7',1.5,0.5],
           ['1/1','maj7',2],['5/3','dom7',2.5,0.5],['10/9','min7',3],['3/2','dom7',3.5,0.5]]},
+  barbershop:{bpm:76,msg:'Barbershop "hanger" dominant-7th tag — the genre that locks hardest into JI. Pure 4:5:6:7 sevenths ring the overtones so cleanly the chord seems to glow ("expanded sound").',
+    prog:[['1/1','maj',0],['3/2','dom7',1],['4/3','dom7',2],['1/1','maj',3,2]]},
+  mediant:{bpm:92,msg:'Chromatic-mediant cycle C→E→A♭→C (major triads a pure 5/4 apart). Like the Coltrane cycle but with plain triads: three legs of 5/4 fall the same 128/125 diesis short of the octave — another spiral that never closes. Pump it.',
+    prog:[['1/1','maj',0],['5/4','maj',1],['25/16','maj',2],['1/1','maj',3,2]]},
+  chorale:{bpm:66,msg:'A four-part chorale cadence (I–IV–I⁶–V–I), the setting where pure triads show off best — sustained close harmony, no vibrato to hide the beats. Original progression, in the spirit of Bach chorale voice-leading.',
+    prog:[['1/1','maj',0],['4/3','maj',1],['1/1','maj',2],['3/2','dom7',3],['1/1','maj',4,2]]},
 };
 document.getElementById('demoSel').addEventListener('change',e=>{if(e.target.value){loadDemo(e.target.value);e.target.value='';}});
 
@@ -2855,7 +2989,8 @@ function buildSynthUI(){
       <td><select data-k="wave">${WAVES.map(w=>`<option ${o.wave===w?'selected':''}>${w}</option>`).join('')}</select></td>
       <td><select data-k="oct">${[-2,-1,0,1,2].map(v=>`<option value="${v}" ${o.oct===v?'selected':''}>${v>0?'+':''}${v}</option>`).join('')}</select></td>
       <td><input type="text" data-k="ratio" value="${o.ratio.n}/${o.ratio.d}" title="detune as a just ratio: 1/1, 81/80 (comma), 33/32, 2/1 (octave)…"></td>
-      <td><input type="range" data-k="level" min="0" max="1" step="0.01" value="${o.level}"></td>`;
+      <td><input type="range" data-k="level" min="0" max="1" step="0.01" value="${o.level}"></td>
+      <td><input type="range" data-k="pan" min="-1" max="1" step="0.01" value="${o.pan||0}" title="stereo pan"></td>`;
     tr.querySelectorAll('[data-k]').forEach(el=>{
       const k=el.dataset.k,ev=(el.type==='checkbox'||el.tagName==='SELECT')?'change':'input';
       el.addEventListener(ev,()=>{
@@ -2880,7 +3015,9 @@ function buildSynthUI(){
    ['res','res',0,12,v=>{if(fxFilt)fxFilt.Q.setTargetAtTime(v,ac.currentTime,0.02);}],
    ['dlyTime','time',0.05,1,v=>{if(fxDly)fxDly.delayTime.setTargetAtTime(v,ac.currentTime,0.05);}],
    ['dlyFb','fb',0,0.85,v=>{if(fxFb)fxFb.gain.setTargetAtTime(v,ac.currentTime,0.02);}],
-   ['dlyMix','echo',0,0.6,v=>{if(fxWet)fxWet.gain.setTargetAtTime(v,ac.currentTime,0.02);}]]
+   ['dlyMix','echo',0,0.6,v=>{if(fxWet)fxWet.gain.setTargetAtTime(v,ac.currentTime,0.02);}],
+   ['revMix','verb',0,1,v=>{if(fxRevWet)fxRevWet.gain.setTargetAtTime(v,ac.currentTime,0.02);}],
+   ['glide','glide',0,1.5,()=>{}]]
   .forEach(([k,lbl,mn,mx,apply])=>{
     const w=document.createElement('div');w.className='adcell';
     w.innerHTML=`<span>${lbl}</span><input type="range" min="${mn}" max="${mx}" step="0.01" value="${synth[k]}">`;

@@ -34,34 +34,35 @@ Current `renderScore` is read-only with naive x=time placement.
   don't let noteheads overlap (min horizontal gap; offset clusters).
 - Keep the roll as the source of truth; score edits mutate `hits`.
 
-## 3. More demos — Sonnet
-- Public-domain piano transcriptions (short, recognizable A-sections only):
-  Satie Gymnopédie No.1, Debussy 1st Arabesque opening, Clair de Lune opening,
-  Bach chorale phrase (chorales show JI triads best). Use the DEMOS/mel format
-  or CHORD_DEMOS; keep each ≤ 8 bars. NO copyrighted material (nothing post-1929
-  US PD line; when unsure, skip).
-- Barbershop tag (the classic "hanger"): melody + 3 parts, 7-limit dom7 —
-  barbershop is THE genre that locks into JI.
-- Chromatic-mediant cycle (C→E→A♭ majors) as another diesis spiral.
+## 3. More demos — Sonnet  ✅ PARTLY DONE (build 36)
+Added: barbershop dominant-7th tag, chromatic-mediant cycle (C→E→A♭→C, another
+diesis spiral), and an original four-part chorale cadence (I–IV–I⁶–V–I).
+Skipped the named piano transcriptions (Satie/Debussy/Clair de Lune) — the
+underlying compositions are PD but a specific *transcription/arrangement* can
+carry its own copyright, and reproducing one from memory risks getting it
+subtly wrong either way, so left as a genuine TODO for whoever wants to
+transcribe from a verified PD score (e.g. IMSLP) rather than from memory.
 
-## 4. Rel-line polish — Sonnet
+## 4. Rel-line polish — Sonnet  ✅ DONE (build 36)
 - Arrowheads on relationship lines (marker-end SVG defs).
 - Clamp labels into the visible grid viewport (they can currently sit above
   the top lane or beyond the right edge when partners are far away).
 - Don't draw lines to partners scrolled far outside the viewport; draw a
   short stub + label at the edge instead.
 
-## 5. Synth v3 — Sonnet
-- Per-oscillator stereo pan (StereoPannerNode) + a "spread" macro.
-- Unison: 2–5 voices per osc, detune expressed as a RATIO (e.g. 81/80 spread),
-  philosophy-consistent.
-- Glide (portamento) for the mono/drone path: exponentialRampTo on frequency.
-- Simple reverb: generated impulse (2s decaying noise) into a ConvolverNode
-  send with a mix slider.
+## 5. Synth v3 — Sonnet  ✅ PARTLY DONE (build 36)
+Added: per-oscillator stereo pan (StereoPannerNode, in the osc table), glide/
+portamento (`synth.glide`, applied when a new drone starts while another is
+ringing — ramps each oscillator from the other drone's current frequency),
+simple reverb (generated 2.2s decaying-noise impulse into a ConvolverNode
+parallel send, `revMix` slider).
+Still open:
+- Unison: 2–5 voices per osc, detune expressed as a RATIO (e.g. 81/80 spread) —
+  philosophy-consistent thickening, not yet built.
 - Per-note velocity: alt+drag vertically on a note bar sets 0–127; scale gain
   and MIDI velocity.
 
-## 6. Loop/arrangement QoL — Sonnet
+## 6. Loop/arrangement QoL — Sonnet  ✅ DONE (build 36)
 - Double-click loop rail = loop that pattern's full length; shift+drag on the
   rail = draw a new loop region (FL-style).
 - Rename patterns (dblclick chip), reorder arrangement chips by drag.
