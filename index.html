@@ -135,6 +135,8 @@
   .noteBar.from{opacity:1;box-shadow:inset 0 0 0 3px #5ee6d8}
   .noteBar.moving{cursor:grabbing}
   .noteBar.doomed{background:#ff5252!important;opacity:1;box-shadow:0 0 10px #ff5252,inset 0 0 0 2px #fff;z-index:5}
+  .rollghost{position:absolute;left:0;top:0;pointer-events:none;z-index:4;opacity:.85;transition:opacity .5s ease}
+  .rollghost .noteBar{opacity:.85}
   .movingghost{position:absolute;height:20px;border-radius:4px;opacity:.28;
        box-shadow:inset 0 0 0 1px #fff;pointer-events:none;z-index:1}
   .relline.old{stroke-dasharray:5 4}
@@ -401,7 +403,7 @@
 </div>
 
 <script>
-const BUILD=39;   // bump every deploy so you can confirm you're on the latest
+const BUILD=40;   // bump every deploy so you can confirm you're on the latest
 //// ---- exact fraction math -------------------------------------------------
 function gcd(a,b){a=Math.abs(a);b=Math.abs(b);while(b){[a,b]=[b,a%b];}return a||1;}
 function fr(n,d){if(d<0){n=-n;d=-d;}const g=gcd(n,d);return{n:n/g,d:d/g};}
@@ -1516,10 +1518,41 @@ function unpackPattern(i){
   pumpState={blockStart:0};seqSel.clear();seqAutoScroll=true;syncLoopInputs();}
 function switchPattern(i,silent){
   if(i===curPat){renderPatBar();return;}
+  const ghost=silent?null:beginRollCrossfade();
   packCurrent();unpackPattern(i);
   histLabel='pattern '+patterns[i].name;
   if(!silent)render();
-  renderPatBar();}
+  renderPatBar();
+  if(ghost)endRollCrossfade(ghost);}
+// Pattern-switch crossfade: the notes leaving the palette fade out while the
+// arriving notes fade in — so a key change in song mode reads as a dissolve,
+// not a hard cut. Snapshot happens before the re-render; the ghost is laid on
+// top afterwards (the innerHTML swap would otherwise wipe it).
+function beginRollCrossfade(){
+  if(seqView==='score')return null;
+  const bars=[...grid.querySelectorAll('.noteBar')];
+  if(!bars.length)return null;
+  const layer=document.createElement('div');layer.className='rollghost';
+  bars.forEach(b=>{
+    const lane=b.parentElement;if(!lane)return;
+    const c=document.createElement('div');c.className='noteBar';
+    c.style.cssText=`left:${b.style.left};width:${b.style.width};top:${lane.offsetTop+2}px;background:${b.style.background};`;
+    layer.appendChild(c);
+  });
+  return layer;
+}
+function endRollCrossfade(layer){
+  if(!layer||seqView==='score')return;
+  grid.querySelectorAll('.rollghost').forEach(e=>e.remove());
+  grid.appendChild(layer);                      // sits over the freshly rendered bars
+  requestAnimationFrame(()=>{layer.style.opacity='0';});
+  setTimeout(()=>layer.remove(),520);
+  grid.querySelectorAll('.noteBar').forEach(b=>{ // arriving notes bloom in
+    b.style.transition='none';b.style.opacity='0';
+    requestAnimationFrame(()=>{b.style.transition='opacity .44s ease';b.style.opacity='';
+      setTimeout(()=>{b.style.transition='';},480);});
+  });
+}
 const loopStartB=()=>Math.max(0,loop.start);
 const loopLenB=()=>loop.len>0?loop.len:BARS;
 const loopEndB=()=>loopStartB()+loopLenB();
@@ -2577,7 +2610,8 @@ function deserialize(st){
     patterns[0].gamut=notes.filter(n=>n.gamut!==false).map(n=>n.id);
     unpackPattern(0);
   }
-  songMode=false;pumpState={blockStart:0};
+  songMode=arrangement.length>0;   // a saved arrangement means ▶ Play should run the song
+  pumpState={blockStart:0};
   if(Array.isArray(st.rdivs)&&st.rdivs.length)rhythmDivs=new Set(st.rdivs);
   if(st.rprimes)rhythmPrimes=st.rprimes;
   selected.clear();seqAutoScroll=true;
